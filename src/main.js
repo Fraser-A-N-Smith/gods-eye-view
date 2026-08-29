@@ -32,6 +32,7 @@ import {
 } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
+import { initTimeline } from './timeline/index.js';
 
 initLogoGaze();
 
@@ -245,6 +246,12 @@ async function init() {
     // Initialize deterministic scene playback for social clip capture
     const sceneDirector = new SceneDirector(viewer, styleManager, dataManager);
 
+    // Rolling history buffer + scrub bar (T). Recording starts here so the
+    // past is already banked by the time anyone opens the bar; it reads the
+    // layers' existing analyst-record snapshots and issues no request of its
+    // own, so this costs nothing at any provider.
+    const timeline = initTimeline({ viewer, dataManager });
+
     // Initialize the voice "whiteboard" annotation engine (world-space renderer)
     const annotations = initAnnotations({ viewer, tileset });
 
@@ -317,6 +324,7 @@ async function init() {
       tileset,
       dataManager,
       sceneDirector,
+      timeline,
       mapStackController,
       annotations,
       weatherEffects,
