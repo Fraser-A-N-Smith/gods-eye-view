@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { governorRequestRender } from './renderGovernor.js';
+import { GIBS_STACKS, createGibsImageryProvider } from './gibsImagery.js';
 
 export const MAP_STACKS = [
   {
@@ -32,6 +33,10 @@ export const MAP_STACKS = [
     kind: 'osm',
     requiresIon: false,
   },
+  // NASA GIBS near-real-time imagery — keyless, and the only stacks here whose
+  // content changes through the day. See src/gibsImagery.js for why these are
+  // stacks rather than a toggleable overlay.
+  ...GIBS_STACKS,
 ];
 
 const DEFAULT_OSM_CREDIT = '© OpenStreetMap contributors';
@@ -261,6 +266,8 @@ export class MapStackController {
         url: 'https://tile.openstreetmap.org/',
         credit: DEFAULT_OSM_CREDIT,
       });
+    } else if (stack.kind === 'gibs') {
+      provider = createGibsImageryProvider(stack);
     } else {
       throw new Error(`Unsupported map stack: ${stack.id}`);
     }

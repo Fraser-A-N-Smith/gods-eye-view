@@ -169,6 +169,21 @@ export const DATA_CREDITS = [
       'part of NASA’s Earth Observing System Data and Information System (EOSDIS)',
   },
   {
+    key: 'nifc',
+    html:
+      'Wildfire perimeters: National Interagency Fire Center — WFIGS Interagency ' +
+      'Wildland Fire Perimeters (' +
+      '<a href="https://data-nifc.opendata.arcgis.com" target="_blank" rel="noopener">data-nifc.opendata.arcgis.com</a>' +
+      ', public domain)',
+  },
+  {
+    key: 'gibs',
+    html:
+      'Satellite imagery basemaps: NASA EOSDIS Global Imagery Browse Services ' +
+      '(GIBS) / Worldview — ' +
+      '<a href="https://worldview.earthdata.nasa.gov" target="_blank" rel="noopener">worldview.earthdata.nasa.gov</a>',
+  },
+  {
     key: 'telegeography',
     html:
       'Submarine cables: © TeleGeography — ' +

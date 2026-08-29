@@ -40,6 +40,7 @@ import {
   isOverBudget as isTomTomOverBudget,
 } from './src/data/tomtomTiles.js';
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
+import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { defineConfig, loadEnv } from 'vite';
@@ -1711,6 +1712,157 @@ function rocketLaunchesProxy() {
 
   return {
     name: 'rocket-launches-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+/**
+ * Wildfire perimeter proxy — NIFC / WFIGS current interagency perimeters.
+ *
+ * Upstream is a public ArcGIS feature service: keyless, but slow and large
+ * enough that hitting it per page load would be rude and would make the layer
+ * feel broken. So it runs behind the same cache discipline as the other feeds
+ * here: memory + disk cache, a 15-minute TTL (perimeters are remapped in
+ * hours, not seconds), single-flight coalescing, and serve-stale-on-failure —
+ * last-good perimeters beat a wiped map.
+ *
+ * The response is normalized and simplified SERVER-SIDE (see
+ * src/data/firePerimetersShape.js) because raw perimeter geometry is the
+ * expensive part: a few large fires can carry tens of thousands of vertices,
+ * and shipping those to the browser to be thrown away there would waste the
+ * bandwidth and the parse. The client receives a bounded, already-simplified
+ * set that reports whether it was truncated.
+ *
+ * `outFields=*` is deliberate: WFIGS attribute names carry source-dependent
+ * prefixes that have drifted across service revisions, and naming a fixed list
+ * makes the whole query fail when one name changes. The shape module tolerates
+ * the aliases instead.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function firePerimetersProxy() {
+  const TTL_MS = 15 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 48 * 1024 * 1024;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'fire-perimeters-v1.json');
+  const UPSTREAM = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services'
+    + '/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query';
+  const ATTRIBUTION = 'NIFC / WFIGS Interagency Wildland Fire Perimeters (public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run or invalid cache */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[fire-perimeters-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=300' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const url = new URL(UPSTREAM);
+    url.searchParams.set('where', '1=1');
+    url.searchParams.set('outFields', '*');
+    url.searchParams.set('outSR', '4326');
+    url.searchParams.set('returnGeometry', 'true');
+    // Coarse server-side generalization before our own simplification pass —
+    // roughly 100 m, well below anything visible at the altitudes this layer
+    // renders at, and it cuts the transfer substantially.
+    url.searchParams.set('maxAllowableOffset', '0.001');
+    url.searchParams.set('resultRecordCount', '1000');
+    url.searchParams.set('f', 'geojson');
+
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    // ArcGIS reports failures as HTTP 200 with an { error } body, so an ok
+    // status is not on its own evidence the query worked.
+    if (parsed?.error) {
+      throw new Error(`upstream error: ${parsed.error?.message || 'unknown'}`);
+    }
+    if (!Array.isArray(parsed?.features)) throw new Error('malformed upstream response');
+
+    const normalized = normalizePerimeterCollection(parsed);
+    const body = JSON.stringify({
+      perimeters: normalized.perimeters,
+      truncated: normalized.truncated,
+      totalFeatures: normalized.totalFeatures,
+      vertices: normalized.vertices,
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/fire-perimeters', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'fire-perimeters', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[fire-perimeters-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Fire perimeters unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'fire-perimeters-proxy',
     configureServer(server) {
       install(server.middlewares);
     },
@@ -7345,6 +7497,7 @@ export default defineConfig(({ mode }) => {
       celestrakProxy(),
       tomtomProxy(),
       firmsProxy(),
+      firePerimetersProxy(),
       rocketLaunchesProxy(),
       terrainHeightsProxy(),
       adsbdbProxy(),
