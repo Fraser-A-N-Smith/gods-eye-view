@@ -47,6 +47,7 @@ import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
+import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
 import { mapOverpassElement } from './src/data/criticalInfrastructureShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
@@ -2716,6 +2717,153 @@ function hamRadioProxy() {
 
   return {
     name: 'ham-radio-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Border Wait Times proxy — CBP live land-crossing wait times, joined
+ * server-side against a small bundled static locations lookup.
+ *
+ * `https://bwt.cbp.gov/api/waittimes` is keyless and public and returns a
+ * plain JSON array keyed by `port_number` — but it carries NO coordinates,
+ * and no companion endpoint with lat/lon exists (confirmed during planning:
+ * `/api/bwtPorts`, `/api/ports`, and several ArcGIS FeatureServer guesses
+ * were all tried and none returned usable data). Because of that, God's Eye
+ * View ships `config/cbp_port_locations.json` — a small, hand-verified
+ * `port_number -> {name, lat, lon}` lookup for the ~25 highest-traffic US
+ * land border crossings — and this proxy is where the live feed gets joined
+ * against it, ONCE, server-side, so the browser never re-runs that join nor
+ * ships the ~85-port raw feed (most of which has no plottable location) to
+ * every client.
+ *
+ * The join itself (`mapWaitTimeEntry`/`mapWaitTimeEntries`) lives in the
+ * Cesium-free `src/data/borderWaitTimesShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js`/`hamRadioPropagationShape.js` precedent) and is
+ * imported directly below — this proxy and the browser layer run the SAME
+ * join implementation, so there is nothing here to fall out of sync.
+ * `borderWaitTimes.test.mjs` covers the join contract once.
+ *
+ * The locations file is loaded once at module init and cached in memory
+ * (`loadLocations` below) — it is static bundled config, not re-read per
+ * request.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function borderWaitTimesProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'border-wait-times-v1.json');
+  const LOCATIONS_PATH = path.join(__dirname, 'config', 'cbp_port_locations.json');
+  const WAIT_TIMES_URL = 'https://bwt.cbp.gov/api/waittimes';
+  const ATTRIBUTION = 'U.S. Customs and Border Protection (US public domain; major crossings only)';
+
+  let cache = null;
+  let diskLoaded = false;
+  let locations = null;
+  const inFlight = new Map();
+
+  async function loadLocations() {
+    if (locations) return locations;
+    try {
+      locations = JSON.parse(await fsp.readFile(LOCATIONS_PATH, 'utf8'));
+    } catch (error) {
+      console.warn(`[border-wait-times-proxy] failed to load ${LOCATIONS_PATH}: ${error?.message || error}`);
+      locations = {};
+    }
+    return locations;
+  }
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[border-wait-times-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const [upstream, locationsLookup] = await Promise.all([
+      fetch(WAIT_TIMES_URL, { signal: AbortSignal.timeout(25000) }),
+      loadLocations(),
+    ]);
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const raw = JSON.parse(text);
+    const crossings = mapWaitTimeEntries(Array.isArray(raw) ? raw : [], locationsLookup);
+
+    const body = JSON.stringify({
+      crossings,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/border-wait-times', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'border-wait-times', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[border-wait-times-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Border wait times unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'border-wait-times-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9214,6 +9362,7 @@ export default defineConfig(({ mode }) => {
       volcanoesProxy(),
       oceanBuoysProxy(),
       hamRadioProxy(),
+      borderWaitTimesProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),

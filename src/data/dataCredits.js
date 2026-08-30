@@ -140,6 +140,13 @@ export const DATA_CREDITS = [
       '<a href="https://pskreporter.info" target="_blank" rel="noopener">PSKReporter.info</a>',
   },
   {
+    key: 'cbp-bwt',
+    html:
+      'Land border crossing wait times: U.S. Customs and Border Protection — ' +
+      '<a href="https://bwt.cbp.gov" target="_blank" rel="noopener">Border Wait Times</a> ' +
+      '(US public domain; major crossings only)',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

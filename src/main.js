@@ -11,6 +11,7 @@ import globalHazardsLayer from './data/globalHazards.js';
 import volcanoesLayer from './data/volcanoes.js';
 import oceanBuoysLayer from './data/oceanBuoys.js';
 import hamRadioPropagationLayer from './data/hamRadioPropagation.js';
+import borderWaitTimesLayer from './data/borderWaitTimes.js';
 import spaceWeatherLayer from './data/spaceWeather.js';
 import weatherAlertsLayer from './data/weatherAlerts.js';
 import tropicalCyclonesLayer from './data/tropicalCyclones.js';
@@ -287,6 +288,7 @@ async function init() {
     dataManager.register(volcanoesLayer);
     dataManager.register(oceanBuoysLayer);
     dataManager.register(hamRadioPropagationLayer);
+    dataManager.register(borderWaitTimesLayer);
     dataManager.register(spaceWeatherLayer);
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
