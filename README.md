@@ -181,11 +181,11 @@ Twenty-eight tools, four jobs — the commands below come straight from the prod
 
 ## 🛰️ What's on the Globe
 
-Thirteen live layers. **Ten of them need nothing at all** — no key, no account, no signup.
+Nineteen live layers. **Fifteen of them need nothing at all** — no key, no account, no signup.
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
-| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM | Google / Ion / OSM | 🔴 Google (required) · 🟡 ion for Bing · 🟢 OSM |
+| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM, NASA GIBS (today's satellite mosaic + GOES GeoColor), Copernicus Sentinel-1 SAR & Sentinel-2 | Google / Ion / OSM / NASA / ESA | 🔴 Google (required) · 🟡 ion for Bing · 🟢 OSM & GIBS · 🟡 Copernicus |
 | ✈️ **Live Flights** | Thousands of live aircraft + route history | OpenSky + adsb.lol | 🟢 (🟡 optional for more polling credits) |
 | 🎖️ **Military Flights** | ADS-B military traffic in amber | adsb.lol | 🟢 |
 | 🚢 **Live Vessels** | Thousands of ships worldwide | AISStream | 🟡 |
@@ -197,6 +197,12 @@ Thirteen live layers. **Ten of them need nothing at all** — no key, no account
 | 🚲 **Bikeshare** | Live station availability | GBFS | 🟢 |
 | 🔥 **Active Fires** | Live NASA FIRMS detections, trailing 24h | NASA FIRMS | 🟡 |
 | 🚀 **Space Missions** | Rolling 30-day launches with payload, stage, and recovery detail | Launch Library 2 | 🟢 (🟡 optional token raises the allowance) |
+| 📰 **Global Reporting** | Where the world is being written about — protests, conflict and disasters geocoded from worldwide coverage in 65 languages, trailing 24h. Themes only, never free-text search | GDELT | 🟢 |
+| ⚠️ **Weather Alerts** | Every US watch, warning and advisory in force, as issued | NOAA NWS | 🟢 |
+| 🌀 **Tropical Cyclones** | Active storms at their latest advisory position, by Saffir–Simpson category | NOAA NHC | 🟢 |
+| 🌌 **Space Weather** | The auroral oval and planetary K-index — and what a storm means for the radio, satellite and GNSS layers | NOAA SWPC | 🟢 |
+| 🔥 **Fire Perimeters** | The mapped burn edge, not just the hotspot — with containment | NIFC / WFIGS | 🟢 |
+| 🛰️ **Vessel Events** | AIS **gaps**, encounters, loitering and port visits — the ships that went quiet. ⚠️ non-commercial licence | Global Fishing Watch | 🟡 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
 
 **Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).

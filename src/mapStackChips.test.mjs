@@ -69,20 +69,19 @@ const CONTROLLER_STACKS = [
   { id: 'osm', label: 'OSM', requiresIon: false, available: true, unavailableReason: null },
   { id: 'gibs-truecolor', label: 'Earth Today', requiresIon: false, available: true, unavailableReason: null },
   { id: 'gibs-geocolor', label: 'GOES GeoColor', requiresIon: false, available: true, unavailableReason: null },
+  { id: 'sentinel2-truecolor', label: 'Sentinel-2', requiresIon: false, available: true, unavailableReason: null },
+  { id: 'sentinel1-sar', label: 'Sentinel-1 SAR', requiresIon: false, available: true, unavailableReason: null },
 ];
 
-test('the row renders exactly the six accepted sources', () => {
+test('the row renders exactly the accepted sources, in allowlist order', () => {
   const container = makeElement();
   renderMapStackChips(container, CONTROLLER_STACKS, { activeId: 'photoreal', doc });
 
-  assert.deepEqual(container.children.map((chip) => chip.dataset.stackId), [
-    'photoreal', 'bing-aerial', 'bing-labels', 'osm', 'gibs-truecolor', 'gibs-geocolor',
-  ]);
+  // The allowlist is the contract; the row must project it exactly, in order.
+  assert.deepEqual(container.children.map((chip) => chip.dataset.stackId), [...PRESENTED_MAP_STACK_IDS]);
   assert.deepEqual(container.children.map(chipText), [
-    'Google 3D', 'Bing Aerial', 'Bing Labels', 'OSM', 'Earth Today', 'GOES GeoColor',
-  ]);
-  assert.deepEqual(PRESENTED_MAP_STACK_IDS, [
-    'photoreal', 'bing-aerial', 'bing-labels', 'osm', 'gibs-truecolor', 'gibs-geocolor',
+    'Google 3D', 'Bing Aerial', 'Bing Labels', 'OSM',
+    'Earth Today', 'GOES GeoColor', 'Sentinel-2', 'Sentinel-1 SAR',
   ]);
   assert.ok(container.children.every((chip) => chip.tagName === 'button' && chip.type === 'button'));
   assert.ok(container.children.every((chip) => chip.classList.contains(MAP_STACK_CHIP_CLASS)));

@@ -2,6 +2,65 @@
 
 Updated: August 30, 2026
 
+> **2026-08-30 — five new sources.** GDELT global reporting, NOAA NWS alerts,
+> NOAA NHC tropical cyclones, NOAA SWPC space weather, Global Fishing Watch
+> vessel events, plus Copernicus Sentinel map stacks. Contracts that are easy
+> to break by "simplifying":
+>
+> **The GDELT and GFW query surfaces are CLOSED ALLOWLISTS, enforced in the
+> proxy.** The client sends a preset id; the proxy resolves it to a GKG theme
+> operator or a GFW dataset id. There is deliberately NO code path that
+> forwards caller text upstream. GDELT's GEO API will happily geocode a
+> person's name, and the refusal lives in the proxy rather than the UI so it
+> holds for anything that can reach the port. Unit tests assert that raw
+> queries and raw dataset strings are refused at both layers.
+>
+> **Mentions are not events.** GDELT counts how often a place appeared in
+> matching coverage. The field is named `mentions`, the status line says
+> "PLACES MENTIONED · NOT AN EVENT COUNT", and an empty region means nobody
+> wrote about it — never that nothing happened. Do not rename this to `count`
+> or `events`.
+>
+> **NWS zone-only alerts must never be silently dropped.** A large share of
+> alerts carry `geometry: null` (issued against forecast zones). They are kept,
+> counted, and reported as "N DRAWN · M ZONE-ONLY", because a map showing only
+> the drawable ones reads as an all-clear over places under a warning.
+> `getZoneOnlyAlerts()` exists so a UI can list what the map omits.
+>
+> **Every GFW record carries its hedge.** The caveat string lives on the preset
+> and is copied onto each record by the shape module, so no render path can
+> drop it. An AIS gap may be a disabled transponder OR a satellite coverage
+> hole, and the caveat names both.
+>
+> **The aurora oval is a FORECAST.** OVATION predicts 30–90 minutes ahead from
+> solar wind at L1. Every status string is asserted to contain "FORECAST", and
+> `getConditions().forecast` is hardcoded true so the HUD and voice cannot drop
+> it. A missing Kp reads UNKNOWN, never QUIET.
+>
+> **Copernicus fails closed.** The stacks declare `requiresRuntimeProbe` and
+> are unavailable until `/api/copernicus/status` confirms the server holds
+> credentials; main.js probes at boot. Showing them as available and serving a
+> black globe is the worse error. Tiles go through `/api/copernicus/tiles/...`
+> because the OAuth token must never reach the browser, and the proxy uses WMS
+> with a computed bbox rather than WMTS so it does not depend on per-instance
+> tile-matrix names (`src/data/tileMath.js`).
+>
+> **`Number()` is banned on external feed values.** Use
+> `src/data/numeric.js` (`finiteOrNull`, `textOrNull`, `clampedOrNull`).
+> `Number(null)`, `Number('')` and `Number(false)` are all 0, which converts
+> "the feed did not say" into "the feed said none". That bug shipped three
+> times — wildfire acreage, planetary K-index, and a blank Kp row — before the
+> helper existed.
+>
+> **Adding a map stack is four edits**, each with a test that fails loudly if
+> missed: `MAP_STACKS`, `PRESENTED_MAP_STACK_IDS`, `CABLE_GLOBE_STACK_IDS` in
+> telegeographySubmarineCables.js, and the tray QA expectation.
+>
+> **The voice tool schema remains untouched** and still matches its sha256 pin.
+> None of these layers is reachable by voice yet; that is a deliberate deferral,
+> not an oversight.
+
+
 > **2026-08-30 — timeline scrubber** (`src/timeline/`, `#timeline-bar`, styles
 > at the tail of `style.css`, toggled with `T`). A rolling in-memory buffer of
 > observed entity positions, plus transport controls to scrub it.

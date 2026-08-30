@@ -3,6 +3,41 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (b)
+
+### Added
+
+- Added a **Global Reporting** layer (GDELT): geocoded event reporting from
+  worldwide coverage in 65 languages over the trailing 24 hours. The query
+  surface is a closed allowlist of themes — the client sends a preset id and
+  the proxy refuses anything else — because GDELT's API will geocode a person's
+  name and this project does not build named-person search.
+- Added **Weather Alerts** (NOAA NWS) and **Tropical Cyclones** (NOAA NHC).
+  Both keyless and US public domain.
+- Added **Space Weather** (NOAA SWPC): the OVATION auroral oval and planetary
+  K-index, with the operational consequence shown next to the number — a
+  geomagnetic storm is simultaneously HF fade, satellite drag and GNSS error.
+- Added **Vessel Events** (Global Fishing Watch): AIS gaps, encounters,
+  loitering and port visits — the behaviour a live-position layer structurally
+  cannot show. Optional `GFW_API_TOKEN`; **CC BY-NC 4.0, non-commercial only**.
+- Added **Copernicus Sentinel-1 SAR and Sentinel-2** map sources. Tiles are
+  proxied server-side because Copernicus needs an OAuth token that must never
+  reach the browser. Optional; the sources stay unavailable, with a stated
+  reason, until the server is configured.
+- Added `src/data/numeric.js`, shared strict coercion for external feed values.
+
+### Fixed
+
+- A missing planetary K-index no longer reads as a quiet one, and a blank Kp row
+  no longer reports 0. Both were the `Number(null) === 0` trap that had already
+  produced "0 acres" for wildfires of unknown size; the shared helper now
+  prevents the whole class.
+
+### Changed
+
+- Two share-link tests derived their "unknown layer token" from the registry
+  instead of hardcoding a letter, which had silently become a registered token.
+
 ## [Unreleased] — 2026-08-30
 
 ### Added

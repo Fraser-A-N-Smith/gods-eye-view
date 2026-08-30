@@ -6,6 +6,11 @@ import flightsLayer from './data/flights.js';
 import militaryFlightsLayer from './data/militaryFlights.js';
 import earthquakesLayer from './data/earthquakes.js';
 import firePerimetersLayer from './data/firePerimeters.js';
+import gdeltEventsLayer from './data/gdeltEvents.js';
+import spaceWeatherLayer from './data/spaceWeather.js';
+import weatherAlertsLayer from './data/weatherAlerts.js';
+import tropicalCyclonesLayer from './data/tropicalCyclones.js';
+import vesselEventsLayer from './data/vesselEvents.js';
 import satellitesLayer from './data/satellites.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
 import trafficLayer from './data/traffic.js';
@@ -192,6 +197,23 @@ async function init() {
     });
     await mapStackController.setStack(tileset ? 'photoreal' : 'osm', { silent: true });
 
+    // Copernicus stacks need OAuth credentials and an instance id on the
+    // SERVER, which the browser cannot see. They start unavailable and are
+    // enabled only if the probe says the server is configured — failing closed,
+    // so a keyless install shows a reason rather than a black globe.
+    void fetch('/api/copernicus/status')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((status) => {
+        const available = status?.hasKey === true;
+        for (const stackId of status?.stacks || []) {
+          mapStackController.setStackAvailability(stackId, {
+            available,
+            reason: available ? null : 'Copernicus credentials not configured on the server',
+          });
+        }
+      })
+      .catch(() => { /* probe failure leaves the stacks unavailable, which is correct */ });
+
     // Initialize the style manager (post-processing, HUD, locations, share links)
     const styleManager = new StyleManager(viewer, { mapStackController });
     // The previous multi-canvas weather compositor remains disabled. Cockpit
@@ -216,6 +238,11 @@ async function init() {
     dataManager.register(militaryFlightsLayer);
     dataManager.register(earthquakesLayer);
     dataManager.register(firePerimetersLayer);
+    dataManager.register(gdeltEventsLayer);
+    dataManager.register(spaceWeatherLayer);
+    dataManager.register(weatherAlertsLayer);
+    dataManager.register(tropicalCyclonesLayer);
+    dataManager.register(vesselEventsLayer);
     dataManager.register(satellitesLayer);
     dataManager.register(rocketLaunchesLayer);
     rocketLaunchesLayer.attachDataManager(dataManager);

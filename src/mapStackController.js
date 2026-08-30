@@ -1,6 +1,7 @@
 import * as Cesium from 'cesium';
 import { governorRequestRender } from './renderGovernor.js';
 import { GIBS_STACKS, createGibsImageryProvider } from './gibsImagery.js';
+import { COPERNICUS_STACKS, createCopernicusImageryProvider } from './copernicusImagery.js';
 
 export const MAP_STACKS = [
   {
@@ -37,6 +38,9 @@ export const MAP_STACKS = [
   // content changes through the day. See src/gibsImagery.js for why these are
   // stacks rather than a toggleable overlay.
   ...GIBS_STACKS,
+  // Copernicus Sentinel — SAR and 10 m optical. Credentialled, so availability
+  // is probed at runtime rather than inferred (see setStackAvailability).
+  ...COPERNICUS_STACKS,
 ];
 
 const DEFAULT_OSM_CREDIT = '© OpenStreetMap contributors';
@@ -72,6 +76,8 @@ export class MapStackController {
     this._imageryProviders = new Map();
     this._isSwitching = false;
     this._lastError = null;
+    /** Runtime probe outcomes for credentialled stacks, keyed by stack id. */
+    this._availability = new Map();
     // Tracks which terrain PROVIDER is actually installed on the scene, not
     // just an ion-available boolean: 'world' (Cesium World Terrain, ion
     // token), 'keyless' (Re:Earth or its Ellipsoid fallback), or null (never
@@ -120,9 +126,13 @@ export class MapStackController {
    * @returns {string}
    */
   _unavailableReason(stack) {
-    return stack?.requiresIon
-      ? 'Cesium ion token required for Bing stacks'
-      : `${stack?.label || 'This map stack'} is unavailable`;
+    if (stack?.requiresIon) return 'Cesium ion token required for Bing stacks';
+    if (stack?.requiresRuntimeProbe) {
+      const probed = this._availability.get(stack.id);
+      return probed?.reason
+        || `${stack?.label || 'This map stack'} needs Copernicus credentials on the server`;
+    }
+    return `${stack?.label || 'This map stack'} is unavailable`;
   }
 
   getStack(id) {
@@ -156,6 +166,36 @@ export class MapStackController {
     if (!stack) return false;
     if (stack.kind === 'photoreal') return !!this.googleTileset;
     if (stack.requiresIon) return !!this.cesiumToken;
+    // A credentialled stack cannot be judged from client state, so it FAILS
+    // CLOSED until a runtime probe says otherwise. Showing it as available and
+    // then serving a black globe would be the worse error.
+    if (stack.requiresRuntimeProbe) {
+      return this._availability.get(stack.id)?.available === true;
+    }
+    return true;
+  }
+
+  /**
+   * Record the outcome of a runtime availability probe for a stack.
+   *
+   * Used for stacks whose usability depends on server-side configuration the
+   * browser cannot see — currently the Copernicus stacks, which need OAuth
+   * credentials and an instance id set on the server.
+   *
+   * @param {string} id Stack id.
+   * @param {{available: boolean, reason?: string}} outcome Probe result.
+   * @returns {boolean} True when the stack exists and the outcome was stored.
+   */
+  setStackAvailability(id, { available, reason = null } = {}) {
+    const stack = this.getStack(id);
+    if (!stack || !stack.requiresRuntimeProbe) return false;
+    this._availability.set(id, { available: available === true, reason });
+    // A stack that just became unavailable while ACTIVE would leave the globe
+    // showing tiles it can no longer refresh; fall back rather than pretend.
+    if (!available && this._activeId === id) {
+      void this.setStack(this.googleTileset ? 'photoreal' : 'osm');
+    }
+    this._emitChange('ready');
     return true;
   }
 
@@ -268,6 +308,8 @@ export class MapStackController {
       });
     } else if (stack.kind === 'gibs') {
       provider = createGibsImageryProvider(stack);
+    } else if (stack.kind === 'copernicus') {
+      provider = createCopernicusImageryProvider(stack);
     } else {
       throw new Error(`Unsupported map stack: ${stack.id}`);
     }

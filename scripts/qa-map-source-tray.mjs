@@ -114,7 +114,8 @@ try {
   check(
     'exact source presentation; the retired left Map Stack panel is gone',
     JSON.stringify(presentation.ids) === JSON.stringify([
-      'photoreal', 'bing-aerial', 'bing-labels', 'osm', 'gibs-truecolor', 'gibs-geocolor',
+      'photoreal', 'bing-aerial', 'bing-labels', 'osm',
+      'gibs-truecolor', 'gibs-geocolor', 'sentinel2-truecolor', 'sentinel1-sar',
     ]) && !presentation.retiredPanel,
     JSON.stringify(presentation),
   );

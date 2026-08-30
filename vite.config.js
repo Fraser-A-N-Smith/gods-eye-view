@@ -41,6 +41,15 @@ import {
 } from './src/data/tomtomTiles.js';
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
+import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
+import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
+import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
+import {
+  resolveVesselEventPreset,
+  normalizeVesselEvents,
+} from './src/data/vesselEventsShape.js';
+import { tileBBox3857, parseTilePath } from './src/data/tileMath.js';
+import { COPERNICUS_STACKS, COPERNICUS_TILE_SIZE } from './src/copernicusImagery.js';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { defineConfig, loadEnv } from 'vite';
@@ -1869,6 +1878,836 @@ function firePerimetersProxy() {
     configurePreviewServer(server) {
       install(server.middlewares);
     },
+  };
+}
+
+
+/**
+ * GDELT GEO 2.0 proxy — geocoded global event reporting.
+ *
+ * Upstream is keyless and unmetered, so the cache here is politeness and
+ * latency rather than budget: GDELT recomputes on a ~15 minute cadence and
+ * re-asking faster than that returns the same answer more slowly.
+ *
+ * ## The request surface is closed
+ *
+ * The client sends `?preset=<id>` and nothing else. The id is looked up in
+ * `GDELT_PRESETS` and the corresponding GKG theme operator is what reaches
+ * GDELT; an unknown id is a 400. There is deliberately NO path that forwards
+ * caller-supplied text upstream, because GDELT's GEO API will geocode a
+ * person's name across worldwide news and this project does not build
+ * named-person search. Keeping the refusal in the proxy rather than the UI
+ * means it holds for anything that can reach the port.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function gdeltEventsProxy() {
+  // GDELT's GEO index recomputes roughly every 15 minutes; half that is a
+  // responsive cache that still cannot stampede upstream.
+  const TTL_MS = 7 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'gdelt');
+  const ATTRIBUTION = 'The GDELT Project — gdeltproject.org';
+
+  /** @type {Map<string, {at:number, body:string}>} */
+  const cache = new Map();
+  const inFlight = new Map();
+
+  const diskPath = (presetId) => path.join(CACHE_DIR, `geo-${presetId}.json`);
+
+  async function loadDiskCache(presetId) {
+    if (cache.has(presetId)) return;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(diskPath(presetId), 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache.set(presetId, parsed);
+    } catch { /* first run for this preset */ }
+  }
+
+  async function saveDiskCache(presetId, entry) {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(diskPath(presetId), JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[gdelt-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=300' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream(preset) {
+    const url = new URL('https://api.gdeltproject.org/api/v2/geo/geo');
+    url.searchParams.set('query', preset.query);
+    url.searchParams.set('format', 'GeoJSON');
+    url.searchParams.set('mode', 'PointData');
+    url.searchParams.set('timespan', '24H');
+
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // GDELT answers a bad query with an HTML/text error page under HTTP 200,
+      // so a parse failure is an upstream rejection, not a transport fault.
+      throw new Error('upstream returned a non-JSON body (likely a rejected query)');
+    }
+    const normalized = normalizeGdeltCollection(parsed);
+    const body = JSON.stringify({
+      preset: preset.id,
+      label: preset.label,
+      query: preset.query,
+      records: normalized.records,
+      truncated: normalized.truncated,
+      totalFeatures: normalized.totalFeatures,
+      maxMentions: normalized.maxMentions,
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set(preset.id, fresh);
+    void saveDiskCache(preset.id, fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/gdelt/geo', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveGdeltPreset(requested);
+      if (!preset) {
+        // Deliberately does not echo the rejected value back.
+        send(res, 400, JSON.stringify({ error: 'Unknown event preset' }), 'NONE');
+        return;
+      }
+
+      await loadDiskCache(preset.id);
+      const cached = cache.get(preset.id);
+      if (cached && Date.now() - cached.at < TTL_MS) {
+        send(res, 200, cached.body, 'HIT');
+        return;
+      }
+      const stale = cached;
+      const request = coalesceProxyRequest(inFlight, `gdelt:${preset.id}`, () => refreshUpstream(preset));
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[gdelt-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'GDELT unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'gdelt-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+
+/**
+ * NOAA SWPC space-weather proxy — aurora forecast and geomagnetic state.
+ *
+ * Upstream is keyless US-government data. It runs behind a proxy anyway for
+ * two concrete reasons, neither of them secrecy:
+ *
+ *  1. **Size.** `ovation_aurora_latest.json` is a 1°x1° global grid — roughly
+ *     65,000 triples, the overwhelming majority of them zero. Filtering and
+ *     capping it here means the browser receives a few thousand points rather
+ *     than several megabytes it would immediately throw away.
+ *  2. **CORS.** services.swpc.noaa.gov does not reliably send permissive CORS
+ *     headers, and a keyless source is no use if the browser refuses to read it.
+ *
+ * The two upstream products are fetched together and merged, because the layer
+ * is meaningless with only one of them: an aurora oval with no Kp cannot say
+ * what it implies, and a Kp with no oval has nothing to draw.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function spaceWeatherProxy() {
+  // OVATION republishes about every 5 minutes; Kp is 3-hourly.
+  const TTL_MS = 4 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'space-weather-v1.json');
+  const AURORA_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
+  const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
+  const ATTRIBUTION = 'NOAA / NWS Space Weather Prediction Center (US public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[space-weather-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchJson(url) {
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    return JSON.parse(text);
+  }
+
+  async function refreshUpstream() {
+    // The aurora grid is required; the Kp index is not. A missing Kp degrades
+    // the readout to UNKNOWN rather than failing the whole layer, because the
+    // oval is still worth drawing without it.
+    const [auroraResult, kpResult] = await Promise.allSettled([
+      fetchJson(AURORA_URL),
+      fetchJson(KP_URL),
+    ]);
+    if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
+
+    const aurora = parseAuroraGrid(auroraResult.value);
+    const kp = kpResult.status === 'fulfilled'
+      ? parsePlanetaryKp(kpResult.value)
+      : { kp: null, timeTag: null };
+
+    const body = JSON.stringify({
+      aurora: aurora.points,
+      auroraPeak: aurora.peak,
+      observedAt: aurora.observedAt,
+      forecastAt: aurora.forecastAt,
+      gridDropped: aurora.dropped,
+      kp: kp.kp,
+      kpTimeTag: kp.timeTag,
+      kpAvailable: kpResult.status === 'fulfilled',
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/space-weather', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'space-weather', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[space-weather-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Space weather unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'space-weather-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+
+/**
+ * NOAA weather proxy — NWS active alerts and NHC tropical cyclones.
+ *
+ * Both upstreams are keyless US public-domain data, and both still need a
+ * proxy:
+ *
+ *  - **api.weather.gov rejects requests with no descriptive `User-Agent`.**
+ *    A browser cannot set one (it is a forbidden header), so a direct fetch
+ *    from the page is refused no matter what.
+ *  - **Neither host reliably sends permissive CORS headers**, which makes a
+ *    keyless source unreadable from the browser regardless.
+ *
+ * Alerts are normalized server-side, which matters here because the payload is
+ * large and most of each feature is prose the renderer never uses.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function noaaWeatherProxy() {
+  const ALERTS_TTL_MS = 2 * 60 * 1000;
+  const CYCLONES_TTL_MS = 10 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 48 * 1024 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'noaa-weather');
+  const ALERTS_URL = 'https://api.weather.gov/alerts/active';
+  const CYCLONES_URL = 'https://www.nhc.noaa.gov/CurrentStorms.json';
+  const ALERTS_ATTRIBUTION = 'NOAA / National Weather Service (US public domain)';
+  const CYCLONES_ATTRIBUTION = 'NOAA / National Hurricane Center (US public domain)';
+
+  // api.weather.gov requires a descriptive User-Agent naming the application
+  // and a contact. This is the project's identifier, not the operator's.
+  const USER_AGENT = "(gods-eye-view, https://github.com/bilawalsidhu/gods-eye-view)";
+
+  /** @type {Map<string, {at:number, body:string}>} */
+  const cache = new Map();
+  const inFlight = new Map();
+
+  const diskPath = (key) => path.join(CACHE_DIR, `${key}.json`);
+
+  async function loadDiskCache(key) {
+    if (cache.has(key)) return;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(diskPath(key), 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache.set(key, parsed);
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(key, entry) {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(diskPath(key), JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[noaa-weather-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=60' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchUpstream(url, accept) {
+    const upstream = await fetch(url, {
+      signal: AbortSignal.timeout(25000),
+      headers: { 'User-Agent': USER_AGENT, Accept: accept },
+    });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    return JSON.parse(text);
+  }
+
+  async function refreshAlerts() {
+    const parsed = await fetchUpstream(ALERTS_URL, 'application/geo+json');
+    const normalized = normalizeAlertCollection(parsed);
+    const body = JSON.stringify({
+      alerts: normalized.alerts,
+      drawable: normalized.drawable,
+      zoneOnly: normalized.zoneOnly,
+      truncated: normalized.truncated,
+      total: normalized.total,
+      attribution: ALERTS_ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set('alerts', fresh);
+    void saveDiskCache('alerts', fresh);
+    return fresh;
+  }
+
+  async function refreshCyclones() {
+    const parsed = await fetchUpstream(CYCLONES_URL, 'application/json');
+    const normalized = normalizeCyclones(parsed);
+    const body = JSON.stringify({
+      storms: normalized.storms,
+      total: normalized.total,
+      attribution: CYCLONES_ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set('cyclones', fresh);
+    void saveDiskCache('cyclones', fresh);
+    return fresh;
+  }
+
+  function serve(key, ttlMs, refresh, label) {
+    return async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache(key);
+      const cached = cache.get(key);
+      if (cached && Date.now() - cached.at < ttlMs) {
+        send(res, 200, cached.body, 'HIT');
+        return;
+      }
+      const stale = cached;
+      const request = coalesceProxyRequest(inFlight, key, refresh);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[noaa-weather-proxy] ${key} refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: `${label} unavailable` }),
+          'NONE',
+        );
+      }
+    };
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/weather-alerts', serve('alerts', ALERTS_TTL_MS, refreshAlerts, 'Weather alerts'));
+    middlewares.use('/api/tropical-cyclones', serve('cyclones', CYCLONES_TTL_MS, refreshCyclones, 'Tropical cyclones'));
+  }
+
+  return {
+    name: 'noaa-weather-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+
+/**
+ * Global Fishing Watch vessel-events proxy.
+ *
+ * Upstream needs a bearer token, so this follows the established
+ * secret-bearing pattern here: `GFW_API_TOKEN` is read server-side only and
+ * never reaches the browser; keyless, the endpoint answers
+ * 503 {error:'no_key'} without touching upstream, and the layer reports
+ * KEY REQUIRED rather than looking broken.
+ *
+ * As with the GDELT proxy, the client sends a PRESET ID and the dataset string
+ * is resolved here — a caller cannot name an arbitrary dataset.
+ *
+ * ## Licence note
+ *
+ * GFW data is CC BY-NC 4.0. That is stricter than everything else this app
+ * fetches, and it is recorded in DATA_SOURCES.md alongside the TeleGeography
+ * NonCommercial warning rather than in the ordinary source table.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function vesselEventsProxy() {
+  // Events are recomputed on a pipeline cadence measured in hours, so a short
+  // TTL would only spend the caller's rate allowance re-fetching the same rows.
+  const TTL_MS = 30 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'gfw');
+  const BASE_URL = 'https://gateway.api.globalfishingwatch.org/v3/events';
+  const ATTRIBUTION = 'Global Fishing Watch (CC BY-NC 4.0) — globalfishingwatch.org';
+  /** Trailing window of event history to request. */
+  const WINDOW_DAYS = 14;
+
+  /** @type {Map<string, {at:number, body:string}>} */
+  const cache = new Map();
+  const inFlight = new Map();
+
+  const diskPath = (presetId) => path.join(CACHE_DIR, `events-${presetId}.json`);
+
+  async function loadDiskCache(presetId) {
+    if (cache.has(presetId)) return;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(diskPath(presetId), 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache.set(presetId, parsed);
+    } catch { /* first run for this preset */ }
+  }
+
+  async function saveDiskCache(presetId, entry) {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(diskPath(presetId), JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[gfw-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=600' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream(preset) {
+    const end = new Date();
+    const start = new Date(end.getTime() - WINDOW_DAYS * 86_400_000);
+    const url = new URL(BASE_URL);
+    url.searchParams.set('datasets[0]', preset.dataset);
+    url.searchParams.set('start-date', start.toISOString().slice(0, 10));
+    url.searchParams.set('end-date', end.toISOString().slice(0, 10));
+    url.searchParams.set('limit', '1000');
+    url.searchParams.set('offset', '0');
+
+    const upstream = await fetch(url, {
+      signal: AbortSignal.timeout(30000),
+      headers: {
+        Authorization: `Bearer ${process.env.GFW_API_TOKEN}`,
+        Accept: 'application/json',
+      },
+    });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const normalized = normalizeVesselEvents(JSON.parse(text), preset);
+    const body = JSON.stringify({
+      preset: preset.id,
+      label: preset.label,
+      caveat: preset.caveat,
+      events: normalized.events,
+      truncated: normalized.truncated,
+      total: normalized.total,
+      windowDays: WINDOW_DAYS,
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set(preset.id, fresh);
+    void saveDiskCache(preset.id, fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    // The status route is registered FIRST: connect matches by prefix in
+    // registration order, so '/api/vessel-events' would otherwise swallow
+    // '/api/vessel-events/status' and the status probe would never run.
+    middlewares.use('/api/vessel-events/status', (req, res) => {
+      send(res, 200, JSON.stringify({ hasKey: Boolean(process.env.GFW_API_TOKEN) }), 'NONE');
+    });
+
+    middlewares.use('/api/vessel-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveVesselEventPreset(requested);
+      if (!preset) {
+        send(res, 400, JSON.stringify({ error: 'Unknown vessel event preset' }), 'NONE');
+        return;
+      }
+      if (!process.env.GFW_API_TOKEN) {
+        // Answered without touching upstream, so a keyless install costs the
+        // provider nothing and the poll stays cheap.
+        send(res, 503, JSON.stringify({ error: 'no_key' }), 'NONE');
+        return;
+      }
+
+      await loadDiskCache(preset.id);
+      const cached = cache.get(preset.id);
+      if (cached && Date.now() - cached.at < TTL_MS) {
+        send(res, 200, cached.body, 'HIT');
+        return;
+      }
+      const stale = cached;
+      const request = coalesceProxyRequest(inFlight, `gfw:${preset.id}`, () => refreshUpstream(preset));
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[gfw-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Global Fishing Watch unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'vessel-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+
+/**
+ * Copernicus Sentinel tile proxy — SAR and optical imagery.
+ *
+ * Copernicus is not an anonymous tile server. Access needs an OAuth
+ * client-credentials token, so the browser cannot fetch these tiles directly
+ * even in principle, and the credentials must stay server-side. This proxy
+ * holds them, mints and caches the token, and translates each XYZ tile request
+ * into a Sentinel Hub WMS GetMap call.
+ *
+ * WMS with an explicit bounding box rather than WMTS is deliberate: WMTS ties
+ * the request to Sentinel Hub's tile-matrix identifiers, which vary per
+ * configuration instance, whereas the bbox is the same arithmetic everywhere
+ * (see src/data/tileMath.js).
+ *
+ * Configuration (all three required):
+ *   COPERNICUS_CLIENT_ID, COPERNICUS_CLIENT_SECRET  — OAuth client credentials
+ *   COPERNICUS_INSTANCE_ID                          — Sentinel Hub configuration
+ *
+ * Routes:
+ *   GET /api/copernicus/status                        → {hasKey, stacks}
+ *   GET /api/copernicus/tiles/{stackId}/{z}/{x}/{y}   → image, or 503 no_key
+ *
+ * @returns {import('vite').Plugin}
+ */
+function copernicusImageryProxy() {
+  const TOKEN_URL = 'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token';
+  const WMS_BASE = 'https://sh.dataspace.copernicus.eu/ogc/wms';
+  // Tiles are large and immutable for a given day; a generous cache keeps an
+  // afternoon of panning off the account's processing-unit allowance.
+  const TILE_TTL_MS = 6 * 60 * 60 * 1000;
+  const MAX_TILE_BYTES = 8 * 1024 * 1024;
+  const MAX_CACHED_TILES = 3000;
+  /** Refresh the token this long before it actually expires. */
+  const TOKEN_SKEW_MS = 60_000;
+
+  const STACKS_BY_ID = new Map(COPERNICUS_STACKS.map((stack) => [stack.id, stack]));
+
+  /** @type {{value:string, expiresAt:number}|null} */
+  let token = null;
+  let tokenPromise = null;
+  /** @type {Map<string, {at:number, buffer:Buffer, contentType:string}>} */
+  const tileCache = new Map();
+
+  const hasCredentials = () => Boolean(
+    process.env.COPERNICUS_CLIENT_ID
+    && process.env.COPERNICUS_CLIENT_SECRET
+    && process.env.COPERNICUS_INSTANCE_ID,
+  );
+
+  async function getToken() {
+    const now = Date.now();
+    if (token && now < token.expiresAt - TOKEN_SKEW_MS) return token.value;
+    // Single-flight: a cold cache plus a full viewport of tiles would
+    // otherwise mint dozens of tokens at once.
+    if (tokenPromise) return tokenPromise;
+
+    tokenPromise = (async () => {
+      const body = new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: process.env.COPERNICUS_CLIENT_ID,
+        client_secret: process.env.COPERNICUS_CLIENT_SECRET,
+      });
+      const response = await fetch(TOKEN_URL, {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        signal: AbortSignal.timeout(20000),
+      });
+      const text = await readResponseTextCapped(response, 256 * 1024);
+      if (!response.ok) throw new Error(`token HTTP ${response.status}`);
+      const parsed = JSON.parse(text);
+      const value = String(parsed?.access_token || '');
+      if (!value) throw new Error('token response carried no access_token');
+      const lifetimeMs = (Number(parsed?.expires_in) || 600) * 1000;
+      token = { value, expiresAt: Date.now() + lifetimeMs };
+      return value;
+    })().finally(() => { tokenPromise = null; });
+
+    return tokenPromise;
+  }
+
+  function trimTileCache() {
+    if (tileCache.size <= MAX_CACHED_TILES) return;
+    // Map preserves insertion order, so the oldest keys come first.
+    const excess = tileCache.size - MAX_CACHED_TILES;
+    let removed = 0;
+    for (const key of tileCache.keys()) {
+      tileCache.delete(key);
+      removed += 1;
+      if (removed >= excess) break;
+    }
+  }
+
+  async function fetchTile(stack, z, x, y) {
+    const box = tileBBox3857(z, x, y);
+    if (!box) throw Object.assign(new Error('invalid tile'), { badRequest: true });
+
+    const accessToken = await getToken();
+    const url = new URL(`${WMS_BASE}/${process.env.COPERNICUS_INSTANCE_ID}`);
+    url.searchParams.set('SERVICE', 'WMS');
+    url.searchParams.set('REQUEST', 'GetMap');
+    url.searchParams.set('VERSION', '1.3.0');
+    url.searchParams.set('LAYERS', stack.copernicus.layerId);
+    url.searchParams.set('FORMAT', stack.copernicus.format);
+    url.searchParams.set('CRS', 'EPSG:3857');
+    url.searchParams.set('BBOX', `${box.minX},${box.minY},${box.maxX},${box.maxY}`);
+    url.searchParams.set('WIDTH', String(COPERNICUS_TILE_SIZE));
+    url.searchParams.set('HEIGHT', String(COPERNICUS_TILE_SIZE));
+    // Most-recent acquisition wins; without this the service can return an
+    // arbitrary scene from the archive and the "live" stack would be anything but.
+    url.searchParams.set('MAXCC', '40');
+    url.searchParams.set('PRIORITY', 'mostRecent');
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      const error = new Error(`upstream HTTP ${response.status}`);
+      error.upstreamStatus = response.status;
+      // A rejected token is worth discarding so the next tile re-mints one.
+      if (response.status === 401 || response.status === 403) token = null;
+      throw error;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > MAX_TILE_BYTES) throw new Error('tile exceeded size cap');
+    return { buffer, contentType: response.headers.get('content-type') || stack.copernicus.format };
+  }
+
+  function install(middlewares) {
+    // Registered before the tile route: connect matches by prefix in order.
+    middlewares.use('/api/copernicus/status', (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({
+        hasKey: hasCredentials(),
+        stacks: COPERNICUS_STACKS.map((stack) => stack.id),
+      }));
+    });
+
+    middlewares.use('/api/copernicus/tiles', async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      const pathname = String(req.url || '').split('?')[0];
+      const stackId = decodeURIComponent(pathname.split('/').filter(Boolean)[0] || '');
+      const stack = STACKS_BY_ID.get(stackId);
+      const tile = parseTilePath(pathname);
+      if (!stack || !tile) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_tile' }));
+        return;
+      }
+      if (!hasCredentials()) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no_key' }));
+        return;
+      }
+
+      const key = `${stack.id}/${tile.z}/${tile.x}/${tile.y}`;
+      const cached = tileCache.get(key);
+      if (cached && Date.now() - cached.at < TILE_TTL_MS) {
+        res.writeHead(200, {
+          'Content-Type': cached.contentType,
+          'Cache-Control': 'public, max-age=21600',
+          'X-GEV-Cache': 'HIT',
+        });
+        res.end(cached.buffer);
+        return;
+      }
+
+      try {
+        const result = await fetchTile(stack, tile.z, tile.x, tile.y);
+        tileCache.set(key, { at: Date.now(), buffer: result.buffer, contentType: result.contentType });
+        trimTileCache();
+        res.writeHead(200, {
+          'Content-Type': result.contentType,
+          'Cache-Control': 'public, max-age=21600',
+          'X-GEV-Cache': 'MISS',
+        });
+        res.end(result.buffer);
+      } catch (error) {
+        if (cached) {
+          // A stale tile beats a hole in the map.
+          res.writeHead(200, {
+            'Content-Type': cached.contentType,
+            'Cache-Control': 'no-store',
+            'X-GEV-Cache': 'STALE-ERROR',
+          });
+          res.end(cached.buffer);
+          return;
+        }
+        const status = error?.badRequest
+          ? 400
+          : (Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502);
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Copernicus tile unavailable' }));
+      }
+    });
+  }
+
+  return {
+    name: 'copernicus-imagery-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
   };
 }
 
@@ -7498,6 +8337,11 @@ export default defineConfig(({ mode }) => {
       tomtomProxy(),
       firmsProxy(),
       firePerimetersProxy(),
+      gdeltEventsProxy(),
+      spaceWeatherProxy(),
+      noaaWeatherProxy(),
+      vesselEventsProxy(),
+      copernicusImageryProxy(),
       rocketLaunchesProxy(),
       terrainHeightsProxy(),
       adsbdbProxy(),

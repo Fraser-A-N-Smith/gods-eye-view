@@ -1,6 +1,6 @@
 // MAP STACK source chips — the always-visible replacement for the `<select>`
 // that used to sit in the Map Stack panel. One button per stack, rendered from
-// `MapStackController.getStacks()`. The six accepted sources below are
+// `MapStackController.getStacks()`. The eight accepted sources below are
 // the whole shipped set; keeping the allowlist explicit means a stack added to
 // `MAP_STACKS` for internal use cannot reach the tray until someone names it
 // here.
@@ -18,6 +18,8 @@ export const PRESENTED_MAP_STACK_IDS = Object.freeze([
   'osm',
   'gibs-truecolor',
   'gibs-geocolor',
+  'sentinel2-truecolor',
+  'sentinel1-sar',
 ]);
 
 /**

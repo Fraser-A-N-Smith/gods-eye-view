@@ -169,6 +169,36 @@ export const DATA_CREDITS = [
       'part of NASA’s Earth Observing System Data and Information System (EOSDIS)',
   },
   {
+    key: 'noaa-nws',
+    html:
+      'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +
+      'National Hurricane Center (' +
+      '<a href="https://www.weather.gov" target="_blank" rel="noopener">weather.gov</a>' +
+      ', US public domain)',
+  },
+  {
+    key: 'noaa-swpc',
+    html:
+      'Space weather (aurora forecast, planetary K-index): NOAA / NWS Space Weather ' +
+      'Prediction Center (' +
+      '<a href="https://www.swpc.noaa.gov" target="_blank" rel="noopener">swpc.noaa.gov</a>' +
+      ', US public domain)',
+  },
+  {
+    key: 'copernicus',
+    html:
+      'Sentinel-1 SAR &amp; Sentinel-2 optical imagery: Contains modified Copernicus ' +
+      'Sentinel data — European Space Agency / ' +
+      '<a href="https://dataspace.copernicus.eu" target="_blank" rel="noopener">Copernicus Data Space</a>',
+  },
+  {
+    key: 'gfw',
+    html:
+      'Vessel events (AIS gaps, encounters, loitering, port visits): ' +
+      '<a href="https://globalfishingwatch.org" target="_blank" rel="noopener">Global Fishing Watch</a> ' +
+      '(CC BY-NC 4.0 — <strong>non-commercial use only</strong>)',
+  },
+  {
     key: 'nifc',
     html:
       'Wildfire perimeters: National Interagency Fire Center — WFIGS Interagency ' +

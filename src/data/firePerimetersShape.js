@@ -24,6 +24,8 @@
  * "unknown" rather than guessed at.
  */
 
+import { finiteOrNull, textOrNull } from './numeric.js';
+
 /** Candidate attribute names per logical field, most specific first. */
 export const FIELD_ALIASES = Object.freeze({
   name: ['poly_IncidentName', 'attr_IncidentName', 'IncidentName', 'incident_name'],
@@ -45,18 +47,9 @@ export function pickField(properties, aliases) {
   return null;
 }
 
-const asNumber = (value) => {
-  // Number(null) and Number('') are both 0, which would turn "we could not
-  // read this fire's size" into "this fire is zero acres". Absent stays absent.
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-};
+const asNumber = finiteOrNull;
 
-const asText = (value) => {
-  const text = String(value ?? '').trim();
-  return text || null;
-};
+const asText = textOrNull;
 
 /**
  * Ramer–Douglas–Peucker on a GeoJSON ring ([[lon,lat], …]).
