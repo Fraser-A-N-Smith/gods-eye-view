@@ -10,6 +10,9 @@ import {
   parsePlanetaryKp,
   auroraStyle,
   KP_BANDS,
+  parseDonkiNotifications,
+  parseNeoFeed,
+  parseRadioBlackoutScale,
 } from './spaceWeatherShape.js';
 
 test('Kp bands are ordered, distinct, and each names an operational effect', () => {
@@ -146,4 +149,145 @@ test('aurora styling scales with probability and vanishes at zero', () => {
   assert.ok(weak.pixelSize < strong.pixelSize);
   assert.notEqual(weak.css, strong.css, 'intensity shifts colour, as real aurora does');
   assert.equal(auroraStyle(NaN).pixelSize, 0);
+});
+
+// ── DONKI solar-event notifications ──────────────────────────────────────
+
+test('DONKI notifications map to panel events, newest first', () => {
+  const events = parseDonkiNotifications([
+    {
+      messageType: 'FLR',
+      messageID: '2026-08-28-FLR-001',
+      messageIssueTime: '2026-08-28T10:00:00Z',
+      messageURL: 'https://example.test/flr-001',
+      messageBody: 'Preamble text.\n\n## Summary: A significant flare occurred at 09:50 UTC.\n\n## Some other heading\nmore text',
+    },
+    {
+      messageType: 'CME',
+      messageID: '2026-08-29-CME-002',
+      messageIssueTime: '2026-08-29T12:00:00Z',
+      messageURL: 'https://example.test/cme-002',
+      messageBody: 'No summary heading here, just a long paragraph of body text that keeps going past two hundred characters so the truncation path has something real to cut, well past the two hundred character mark to be sure it triggers.',
+    },
+  ]);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].id, '2026-08-29-CME-002', 'newest issue time sorts first');
+  assert.equal(events[0].type, 'CME');
+  assert.equal(events[1].summary, 'A significant flare occurred at 09:50 UTC.', 'extracts the Summary paragraph, not the whole body');
+  assert.ok(events[0].summary.length <= 200, 'falls back to a ~200-char cap without a Summary heading');
+  assert.equal(events[1].url, 'https://example.test/flr-001');
+});
+
+test('DONKI summary extraction handles a blank line between the heading and its paragraph', () => {
+  // The real production shape: "## Summary:\n\n<paragraph>\n\n## Notes: ...".
+  // A naive paragraph-end search matches that leading blank line first and
+  // returns "" — this pins the fix.
+  const events = parseDonkiNotifications([{
+    messageType: 'CME',
+    messageID: '20260830-AL-001',
+    messageIssueTime: '2026-08-30T07:53Z',
+    messageURL: 'https://example.test/al-001',
+    messageBody:
+      '## Message Type: Space Weather Notification - CME\n##\n\n' +
+      '## Summary:\n\nC-type CME detected by STEREO A / GOES / SOHO. \n\n' +
+      'Start time of the event: 2026-08-30T01:48Z.\n\n' +
+      '## Notes: \n\nThis CME event is associated with a flare.\n',
+  }]);
+  assert.equal(events[0].summary, 'C-type CME detected by STEREO A / GOES / SOHO.');
+});
+
+test('DONKI notifications cap at 20 and skip entries missing required fields', () => {
+  const good = Array.from({ length: 25 }, (_, i) => ({
+    messageType: 'CME',
+    messageID: `id-${i}`,
+    messageIssueTime: new Date(2026, 0, 1 + i).toISOString(),
+    messageURL: null,
+    messageBody: 'body',
+  }));
+  const junk = [null, {}, { messageType: 'CME' }, { messageType: 'CME', messageID: 'x', messageIssueTime: 'not-a-date' }];
+  const events = parseDonkiNotifications([...good, ...junk]);
+  assert.equal(events.length, 20);
+});
+
+test('a malformed DONKI payload yields no events rather than throwing', () => {
+  for (const input of [null, undefined, {}, 'nope', [null, 1, 'x']]) {
+    assert.deepEqual(parseDonkiNotifications(input), []);
+  }
+});
+
+// ── NeoWs close approaches ────────────────────────────────────────────────
+
+test('NeoWs feed flattens by date, sorts closest-first, and coerces numerics', () => {
+  const payload = {
+    near_earth_objects: {
+      '2026-08-30': [
+        {
+          id: '111',
+          name: '(2026 AA1)',
+          is_potentially_hazardous_asteroid: false,
+          estimated_diameter: { meters: { estimated_diameter_min: 10.5, estimated_diameter_max: 23.4 } },
+          close_approach_data: [{
+            miss_distance: { kilometers: '5000000' },
+            relative_velocity: { kilometers_per_second: '12.3' },
+            epoch_date_close_approach: 1756540800000,
+          }],
+        },
+        {
+          id: '222',
+          name: '(2026 BB2)',
+          is_potentially_hazardous_asteroid: true,
+          estimated_diameter: { meters: { estimated_diameter_min: 100, estimated_diameter_max: 220 } },
+          close_approach_data: [{
+            miss_distance: { kilometers: '900000' },
+            relative_velocity: { kilometers_per_second: '30.1' },
+            epoch_date_close_approach: 1756541000000,
+          }],
+        },
+      ],
+    },
+  };
+  const approaches = parseNeoFeed(payload);
+  assert.equal(approaches.length, 2);
+  assert.equal(approaches[0].id, '222', 'closest miss distance sorts first');
+  assert.ok(Math.abs(approaches[0].missDistanceKm - 900000) < 1e-6);
+  assert.ok(Math.abs(approaches[0].velocityKmS - 30.1) < 1e-9);
+  assert.equal(approaches[0].hazardous, true);
+  assert.equal(approaches[1].hazardous, false);
+  assert.equal(approaches[1].diameterMinM, 10.5);
+});
+
+test('NeoWs objects lacking a usable close approach are skipped, not fatal', () => {
+  const approaches = parseNeoFeed({
+    near_earth_objects: {
+      '2026-08-30': [
+        { id: 'no-approach', name: 'x', close_approach_data: [] },
+        { id: 'bad-distance', name: 'x', close_approach_data: [{ miss_distance: {} }] },
+        null,
+        { name: 'no-id', close_approach_data: [{ miss_distance: { kilometers: '1' } }] },
+      ],
+    },
+  });
+  assert.deepEqual(approaches, []);
+});
+
+test('a malformed NeoWs payload yields no approaches rather than throwing', () => {
+  for (const input of [null, undefined, {}, { near_earth_objects: null }, { near_earth_objects: 'x' }]) {
+    assert.deepEqual(parseNeoFeed(input), []);
+  }
+});
+
+// ── NOAA radio-blackout (R) scale ────────────────────────────────────────
+
+test('the R scale reads today\'s key, not the forecast days', () => {
+  const scale = parseRadioBlackoutScale({
+    '0': { R: { Scale: '2', Text: 'Moderate radio blackout' } },
+    '1': { R: { Scale: '5', Text: 'should not be read' } },
+  });
+  assert.deepEqual(scale, { scale: '2', text: 'Moderate radio blackout' });
+});
+
+test('a missing R entry is null, not a guessed scale', () => {
+  for (const input of [null, undefined, {}, { '0': {} }, { '0': { R: null } }, 'nope']) {
+    assert.equal(parseRadioBlackoutScale(input), null);
+  }
 });

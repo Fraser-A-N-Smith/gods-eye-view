@@ -42,7 +42,13 @@ import {
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
-import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
+import {
+  parseAuroraGrid,
+  parsePlanetaryKp,
+  parseDonkiNotifications,
+  parseNeoFeed,
+  parseRadioBlackoutScale,
+} from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
@@ -2053,20 +2059,48 @@ function gdeltEventsProxy() {
  *  2. **CORS.** services.swpc.noaa.gov does not reliably send permissive CORS
  *     headers, and a keyless source is no use if the browser refuses to read it.
  *
- * The two upstream products are fetched together and merged, because the layer
- * is meaningless with only one of them: an aurora oval with no Kp cannot say
- * what it implies, and a Kp with no oval has nothing to draw.
+ * The aurora and Kp products are fetched together and merged, because the
+ * layer is meaningless with only one of them: an aurora oval with no Kp
+ * cannot say what it implies, and a Kp with no oval has nothing to draw.
+ * Three more sources feed the panel only — DONKI solar-event notifications,
+ * NeoWs near-Earth-object close approaches (no surface coordinate, so no
+ * globe entity), and the NOAA R-scale radio-blackout reading. Each of the
+ * three is independently optional: none of them can blank the aurora/Kp
+ * pair, and the aurora/Kp pair failing does not touch the panel fields
+ * (`fetchJson` on the aurora URL still throws first, same as before).
  *
  * @returns {import('vite').Plugin}
  */
 function spaceWeatherProxy() {
-  // OVATION republishes about every 5 minutes; Kp is 3-hourly.
+  // OVATION republishes about every 5 minutes; Kp is 3-hourly. DONKI, NeoWs
+  // and the NOAA scales product are all low-volume and cheap to refetch at
+  // the same cadence, so they share this TTL rather than getting their own.
   const TTL_MS = 4 * 60 * 1000;
   const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
   const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'space-weather-v1.json');
   const AURORA_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
   const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
+  const NOAA_SCALES_URL = 'https://services.swpc.noaa.gov/products/noaa-scales.json';
   const ATTRIBUTION = 'NOAA / NWS Space Weather Prediction Center (US public domain)';
+
+  // api.nasa.gov (DONKI, NeoWs, and the rest of the NASA-family APIs) accepts
+  // the shared public DEMO_KEY out of the box, at a lower rate limit than a
+  // registered key. NASA_API_KEY is optional — same shape as LL2_API_TOKEN
+  // above: unset means "use the keyless default", not "fail".
+  const nasaApiKey = () => String(process.env.NASA_API_KEY || '').trim() || 'DEMO_KEY';
+  const donkiUrl = () => {
+    const toIsoDate = (d) => d.toISOString().slice(0, 10);
+    const end = new Date();
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return 'https://api.nasa.gov/DONKI/notifications' +
+      `?startDate=${toIsoDate(start)}&endDate=${toIsoDate(end)}&type=CME,FLR` +
+      `&api_key=${encodeURIComponent(nasaApiKey())}`;
+  };
+  const neoWsUrl = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    return 'https://api.nasa.gov/neo/rest/v1/feed' +
+      `?start_date=${today}&end_date=${today}&api_key=${encodeURIComponent(nasaApiKey())}`;
+  };
 
   let cache = null;
   let diskLoaded = false;
@@ -2111,12 +2145,17 @@ function spaceWeatherProxy() {
   }
 
   async function refreshUpstream() {
-    // The aurora grid is required; the Kp index is not. A missing Kp degrades
-    // the readout to UNKNOWN rather than failing the whole layer, because the
-    // oval is still worth drawing without it.
-    const [auroraResult, kpResult] = await Promise.allSettled([
+    // The aurora grid is required; everything else is not. A missing Kp
+    // degrades the readout to UNKNOWN rather than failing the whole layer,
+    // because the oval is still worth drawing without it — and the same
+    // per-source null-safety extends to the three panel-only additions: a
+    // DONKI, NeoWs, or NOAA-scales outage empties/nulls only its own field.
+    const [auroraResult, kpResult, donkiResult, neoResult, scalesResult] = await Promise.allSettled([
       fetchJson(AURORA_URL),
       fetchJson(KP_URL),
+      fetchJson(donkiUrl()),
+      fetchJson(neoWsUrl()),
+      fetchJson(NOAA_SCALES_URL),
     ]);
     if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
 
@@ -2124,6 +2163,15 @@ function spaceWeatherProxy() {
     const kp = kpResult.status === 'fulfilled'
       ? parsePlanetaryKp(kpResult.value)
       : { kp: null, timeTag: null };
+    const solarEvents = donkiResult.status === 'fulfilled'
+      ? parseDonkiNotifications(donkiResult.value)
+      : [];
+    const closeApproaches = neoResult.status === 'fulfilled'
+      ? parseNeoFeed(neoResult.value)
+      : [];
+    const radioBlackoutScale = scalesResult.status === 'fulfilled'
+      ? parseRadioBlackoutScale(scalesResult.value)
+      : null;
 
     const body = JSON.stringify({
       aurora: aurora.points,
@@ -2134,6 +2182,9 @@ function spaceWeatherProxy() {
       kp: kp.kp,
       kpTimeTag: kp.timeTag,
       kpAvailable: kpResult.status === 'fulfilled',
+      solarEvents,
+      closeApproaches,
+      radioBlackoutScale,
       attribution: ATTRIBUTION,
       fetchedAt: Date.now(),
     });

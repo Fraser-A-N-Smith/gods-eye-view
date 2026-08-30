@@ -154,6 +154,18 @@ export const DATA_CREDITS = [
       '(US public domain)',
   },
   {
+    key: 'donki',
+    html:
+      'Solar event notifications (CMEs, flares): ' +
+      '<a href="https://ccmc.gsfc.nasa.gov/tools/DONKI/" target="_blank" rel="noopener">NASA DONKI</a>',
+  },
+  {
+    key: 'neows',
+    html:
+      'Near-Earth object close approaches: ' +
+      '<a href="https://api.nasa.gov/" target="_blank" rel="noopener">NASA NeoWs — Near Earth Object Web Service</a>',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +
