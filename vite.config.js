@@ -47,6 +47,7 @@ import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
+import { mapOverpassElement } from './src/data/criticalInfrastructureShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -436,6 +437,7 @@ function makeRateLimiter({ windowMs, max, globalMax }) {
 }
 const _overpassRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
 const _militaryInstallationsRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
+const _criticalInfrastructureRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
 const _routeRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 60, globalMax: 200 });
 
 /**
@@ -8428,6 +8430,333 @@ function militaryInstallationsProxy() {
 }
 
 // ---------------------------------------------------------------------------
+// Critical Infrastructure proxy (OSM power plants + hospitals)
+// ---------------------------------------------------------------------------
+// Viewport-scoped, the same shape as the military-installation proxy above:
+// OSM has hundreds of thousands of hospitals and tens of thousands of power
+// plants worldwide, so this never answers a global query — only a bounded
+// bbox the client's current camera view actually covers. This proxy keeps its
+// OWN small cache/quantization scaffolding rather than reaching into the
+// military-installation one above — mirroring how every other domain-specific
+// proxy in this file (regional-brief, weather-effects, ocean-buoys, ...) owns
+// its own cache rather than sharing a sibling's, so neither layer's TTL,
+// element cap, or cache shape can drift the other out from under it.
+const CRITICAL_INFRASTRUCTURE_CACHE_MS = 5 * 60_000;
+const CRITICAL_INFRASTRUCTURE_STALE_MS = 60 * 60_000;
+const CRITICAL_INFRASTRUCTURE_MAX_CACHE = 80;
+const CRITICAL_INFRASTRUCTURE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/**
+ * Upstream element cap. A response that hits it exactly is SATURATED —
+ * Overpass truncated, so off-viewport features from the snapped bbox may
+ * have crowded out in-viewport ones. The client re-asks for the exact
+ * viewport in that case (see militaryInstallationsProxy's identical
+ * reasoning above).
+ */
+export const CRITICAL_INFRASTRUCTURE_ELEMENT_CAP = 300;
+/**
+ * Disk-cache TTL for mapped elements (ms) — 30 days. OSM power-plant and
+ * hospital tagging changes on a survey timescale, not a session one, the same
+ * reasoning militaryInstallationsProxy applies above.
+ */
+const CRITICAL_INFRASTRUCTURE_DISK_TTL_MS = 30 * 86_400_000;
+/** Disk-cache directory for mapped critical-infrastructure payloads. */
+const CRITICAL_INFRASTRUCTURE_DISK_DIR = path.join(process.cwd(), '.gev-cache', 'critical-infrastructure');
+/**
+ * Cache-key grid step in degrees (~5.5 km) — snapping the request bbox
+ * outward onto this grid lets neighbouring viewports share one cache entry.
+ */
+const CRITICAL_INFRASTRUCTURE_BBOX_STEP_DEG = 0.05;
+const _criticalInfrastructureCache = new Map();
+const _criticalInfrastructureInFlight = new Map();
+
+/**
+ * Snap a request bbox outward onto the shared critical-infrastructure cache
+ * grid. See quantizeMilitaryInstallationBox above for the full rationale.
+ * @param {{south:number, west:number, north:number, east:number}} box
+ * @param {number} [stepDeg]
+ * @returns {{south:number, west:number, north:number, east:number}}
+ */
+export function quantizeCriticalInfrastructureBox(box, stepDeg = CRITICAL_INFRASTRUCTURE_BBOX_STEP_DEG) {
+  const snap = (value, grow) => {
+    const cells = Number((value / stepDeg).toFixed(9));
+    return Number(((grow > 0 ? Math.ceil(cells) : Math.floor(cells)) * stepDeg).toFixed(6));
+  };
+  return {
+    south: Math.max(-90, snap(box.south, -1)),
+    west: Math.max(-180, snap(box.west, -1)),
+    north: Math.min(90, snap(box.north, 1)),
+    east: Math.min(180, snap(box.east, 1)),
+  };
+}
+
+/**
+ * Stable disk/memory cache key for a critical-infrastructure bbox. See
+ * militaryInstallationCacheKey above for why the precision must track the
+ * precision the query actually used.
+ * @param {{south:number, west:number, north:number, east:number}} box
+ * @param {number} [decimals]
+ */
+export function criticalInfrastructureCacheKey(box, decimals = 3) {
+  return [box.south, box.west, box.north, box.east]
+    .map((value) => value.toFixed(decimals))
+    .join(',');
+}
+
+/**
+ * Resolve the READ tiers for one critical-infrastructure request, in order:
+ * fresh memory, then disk. Returns UPSTREAM when neither can answer. See
+ * resolveMilitaryInstallationTier above for the full rationale.
+ * @param {object} options
+ * @param {string} options.cacheKey
+ * @param {Map<string, {payload: object, cachedAt: number}>} options.memoryCache
+ * @param {Map<string, Promise>} options.inFlight
+ * @param {() => Promise<?{payload: object, cachedAt: number}>} options.readDisk
+ * @param {number} [options.now]
+ * @param {number} [options.cacheMs]
+ * @returns {Promise<{source: 'HIT'|'DISK'|'UPSTREAM', entry: ?object}>}
+ */
+export async function resolveCriticalInfrastructureTier({
+  cacheKey,
+  memoryCache,
+  inFlight,
+  readDisk,
+  now = Date.now(),
+  cacheMs = CRITICAL_INFRASTRUCTURE_CACHE_MS,
+}) {
+  const cached = memoryCache.get(cacheKey);
+  if (cached && now - cached.cachedAt <= cacheMs) return { source: 'HIT', entry: cached };
+  if (inFlight.has(cacheKey)) return { source: 'UPSTREAM', entry: null };
+  const disk = await readDisk();
+  return disk ? { source: 'DISK', entry: disk } : { source: 'UPSTREAM', entry: null };
+}
+
+/**
+ * Bring a stored critical-infrastructure entry up to the current payload
+ * shape. See migrateMilitaryInstallationEntry above for why this derives
+ * `saturated` rather than invalidating pre-fix cache entries.
+ * @param {?{payload: object, cachedAt: number}} entry
+ * @returns {?{payload: object, cachedAt: number}}
+ */
+export function migrateCriticalInfrastructureEntry(entry) {
+  if (!entry?.payload || typeof entry.payload.saturated === 'boolean') return entry;
+  const elements = Array.isArray(entry.payload.elements) ? entry.payload.elements : [];
+  return {
+    ...entry,
+    payload: {
+      ...entry.payload,
+      saturated: elements.length >= CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+    },
+  };
+}
+
+/** Whether a stored critical-infrastructure entry is still inside its TTL. */
+export function criticalInfrastructureDiskFresh(
+  entry,
+  maxAgeMs = CRITICAL_INFRASTRUCTURE_DISK_TTL_MS,
+  now = Date.now(),
+) {
+  if (!entry || !Number.isFinite(entry.cachedAt) || !Array.isArray(entry.payload?.elements)) return false;
+  return now - entry.cachedAt <= maxAgeMs;
+}
+
+/** Cache key -> stable disk-cache file path. */
+export function criticalInfrastructureDiskPath(cacheKey, dir = CRITICAL_INFRASTRUCTURE_DISK_DIR) {
+  return path.join(dir, `${createHash('sha1').update(cacheKey).digest('hex')}.json`);
+}
+
+/**
+ * Read a disk-cached critical-infrastructure entry. maxAgeMs Infinity = any
+ * age (the serve-stale path when Overpass is down).
+ * @returns {Promise<?{payload: object, cachedAt: number}>}
+ */
+export async function readCriticalInfrastructureDisk(
+  cacheKey,
+  maxAgeMs,
+  dir = CRITICAL_INFRASTRUCTURE_DISK_DIR,
+) {
+  try {
+    const entry = JSON.parse(await fsp.readFile(criticalInfrastructureDiskPath(cacheKey, dir), 'utf8'));
+    if (!criticalInfrastructureDiskFresh(entry, maxAgeMs)) return null;
+    return migrateCriticalInfrastructureEntry(entry);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist one critical-infrastructure payload ATOMICALLY: serialize to a
+ * temp sibling, then rename over the target. See writeMilitaryInstallationDisk
+ * above for why an in-place overwrite would be unsafe.
+ * @returns {Promise<boolean>} Whether the entry landed.
+ */
+export async function writeCriticalInfrastructureDisk(
+  cacheKey,
+  entry,
+  dir = CRITICAL_INFRASTRUCTURE_DISK_DIR,
+) {
+  const target = criticalInfrastructureDiskPath(cacheKey, dir);
+  const temp = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(temp, JSON.stringify(entry));
+    await fsp.rename(temp, target);
+    return true;
+  } catch (err) {
+    console.warn('[Critical Infrastructure Proxy] disk cache write failed:', err?.message || err);
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    return false;
+  }
+}
+
+/** Reject boxes spanning the antimeridian or larger than 10 degrees on a side. */
+export function validCriticalInfrastructureBox(params) {
+  const south = requiredFiniteQueryNumber(params, 'south');
+  const west = requiredFiniteQueryNumber(params, 'west');
+  const north = requiredFiniteQueryNumber(params, 'north');
+  const east = requiredFiniteQueryNumber(params, 'east');
+  if (![south, west, north, east].every(Number.isFinite)) return null;
+  if (south < -90 || north > 90 || west < -180 || east > 180 || south >= north || west >= east) return null;
+  if (north - south > 10 || east - west > 10) return null;
+  return { south, west, north, east };
+}
+
+function trimCriticalInfrastructureCache() {
+  while (_criticalInfrastructureCache.size > CRITICAL_INFRASTRUCTURE_MAX_CACHE) {
+    const oldest = _criticalInfrastructureCache.keys().next().value;
+    if (oldest === undefined) break;
+    _criticalInfrastructureCache.delete(oldest);
+  }
+}
+
+function criticalInfrastructureProxy() {
+  async function refresh(box, key) {
+    const bbox = `${box.south},${box.west},${box.north},${box.east}`;
+    const ql = `[out:json][timeout:20];(nwr["power"="plant"](${bbox});nwr["amenity"="hospital"](${bbox}););out center tags geom ${CRITICAL_INFRASTRUCTURE_ELEMENT_CAP};`;
+    const upstream = await fetchOverpassPayload(
+      `data=${encodeURIComponent(ql)}`,
+      CRITICAL_INFRASTRUCTURE_MAX_RESPONSE_BYTES,
+    );
+    if (upstream.status >= 400 || upstream.rateLimited || upstream.runtimeError) {
+      throw new Error('Critical infrastructure upstream unavailable');
+    }
+    const parsed = JSON.parse(upstream.body);
+    const rawElements = Array.isArray(parsed?.elements)
+      ? parsed.elements.slice(0, CRITICAL_INFRASTRUCTURE_ELEMENT_CAP)
+      : [];
+    // Pre-mapped server-side (mapOverpassElement, shared with the client — see
+    // criticalInfrastructureShape.js) so the client only ever places records,
+    // never re-implements the tag/coordinate mapping.
+    const elements = rawElements.map(mapOverpassElement).filter(Boolean);
+    const payload = {
+      elements,
+      // Saturation is judged against the RAW upstream count, not the mapped
+      // one: mapping can only drop elements (missing coordinates), so if it
+      // judged against `elements.length` a response that was truly truncated
+      // upstream could read as complete just because some records got
+      // filtered out along the way.
+      saturated: rawElements.length >= CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+      elementCap: CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+      retrievedAt: new Date().toISOString(),
+      status: 'ready',
+    };
+    const entry = { payload, cachedAt: Date.now() };
+    _criticalInfrastructureCache.set(key, entry);
+    trimCriticalInfrastructureCache();
+    writeCriticalInfrastructureDisk(key, entry);
+    return payload;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/critical-infrastructure', async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      if (!_criticalInfrastructureRateLimiter(clientKey(req))) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '5' });
+        res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
+        return;
+      }
+      const url = new URL(req.url, 'http://localhost');
+      const requested = validCriticalInfrastructureBox(url.searchParams);
+      if (!requested) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'A non-dateline bbox no larger than 10 degrees is required' }));
+        return;
+      }
+      // Query the SNAPPED box, not the raw viewport — see the identical
+      // military-installation reasoning above. `exact=1` opts out after a
+      // SATURATED snapped response and is keyed separately.
+      const exact = url.searchParams.get('exact') === '1';
+      const box = exact ? requested : quantizeCriticalInfrastructureBox(requested);
+      const key = exact
+        ? `exact:${criticalInfrastructureCacheKey(box, 5)}`
+        : criticalInfrastructureCacheKey(box);
+      const now = Date.now();
+      const cached = _criticalInfrastructureCache.get(key);
+      const preflight = await resolveCriticalInfrastructureTier({
+        cacheKey: key,
+        memoryCache: _criticalInfrastructureCache,
+        inFlight: _criticalInfrastructureInFlight,
+        readDisk: () => readCriticalInfrastructureDisk(key, CRITICAL_INFRASTRUCTURE_DISK_TTL_MS),
+        now,
+      });
+      if (preflight.source !== 'UPSTREAM') {
+        if (preflight.source === 'DISK') {
+          _criticalInfrastructureCache.set(key, preflight.entry);
+          trimCriticalInfrastructureCache();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60', 'X-Critical-Infrastructure': preflight.source });
+        res.end(JSON.stringify({ ...preflight.entry.payload, status: 'cached' }));
+        return;
+      }
+      const request = coalesceProxyRequest(
+        _criticalInfrastructureInFlight,
+        key,
+        () => refresh(box, key),
+      );
+      try {
+        const payload = await request.promise;
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=60',
+          'X-Critical-Infrastructure': request.shared ? 'INFLIGHT' : 'MISS',
+        });
+        res.end(JSON.stringify(payload));
+      } catch (error) {
+        if (cached && now - cached.cachedAt <= CRITICAL_INFRASTRUCTURE_STALE_MS) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Critical-Infrastructure': 'STALE' });
+          res.end(JSON.stringify({ ...cached.payload, status: 'stale' }));
+          return;
+        }
+        // Overpass is down: last-good mapped context at ANY age beats an
+        // empty layer, the same serve-stale rule the Overpass proxy and the
+        // military-installation proxy both apply.
+        const stale = await readCriticalInfrastructureDisk(key, Infinity);
+        if (stale) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Critical-Infrastructure': 'STALE-DISK' });
+          res.end(JSON.stringify({ ...stale.payload, status: 'stale' }));
+          return;
+        }
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Critical infrastructure context is temporarily unavailable' }));
+      }
+    });
+  }
+
+  return {
+    name: 'critical-infrastructure-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Regional cockpit briefing proxy
 // ---------------------------------------------------------------------------
 const REGIONAL_BRIEF_CACHE_MS = 5 * 60_000;
@@ -8893,6 +9222,7 @@ export default defineConfig(({ mode }) => {
       adsbdbProxy(),
       overpassProxy(),
       militaryInstallationsProxy(),
+      criticalInfrastructureProxy(),
       regionalBriefProxy(),
       weatherEffectsProxy(),
       cctvProxy(),
