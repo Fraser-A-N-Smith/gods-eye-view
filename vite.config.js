@@ -42,13 +42,7 @@ import {
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
-import {
-  parseAuroraGrid,
-  parsePlanetaryKp,
-  parseDonkiNotifications,
-  parseNeoFeed,
-  parseRadioBlackoutScale,
-} from './src/data/spaceWeatherShape.js';
+import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
@@ -2157,34 +2151,17 @@ function spaceWeatherProxy() {
       fetchJson(neoWsUrl()),
       fetchJson(NOAA_SCALES_URL),
     ]);
-    if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
 
-    const aurora = parseAuroraGrid(auroraResult.value);
-    const kp = kpResult.status === 'fulfilled'
-      ? parsePlanetaryKp(kpResult.value)
-      : { kp: null, timeTag: null };
-    const solarEvents = donkiResult.status === 'fulfilled'
-      ? parseDonkiNotifications(donkiResult.value)
-      : [];
-    const closeApproaches = neoResult.status === 'fulfilled'
-      ? parseNeoFeed(neoResult.value)
-      : [];
-    const radioBlackoutScale = scalesResult.status === 'fulfilled'
-      ? parseRadioBlackoutScale(scalesResult.value)
-      : null;
+    // Merge (including the "aurora is required, everything else is
+    // optional" gate) is a pure function in spaceWeatherShape.js
+    // (mergeSpaceWeatherPayload) rather than inline here, specifically so
+    // the independent-failure guarantee is directly unit-testable — see that
+    // function's doc comment. A rejected aurora result throws out of the
+    // call below, same as the inline check this replaced.
+    const merged = mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult });
 
     const body = JSON.stringify({
-      aurora: aurora.points,
-      auroraPeak: aurora.peak,
-      observedAt: aurora.observedAt,
-      forecastAt: aurora.forecastAt,
-      gridDropped: aurora.dropped,
-      kp: kp.kp,
-      kpTimeTag: kp.timeTag,
-      kpAvailable: kpResult.status === 'fulfilled',
-      solarEvents,
-      closeApproaches,
-      radioBlackoutScale,
+      ...merged,
       attribution: ATTRIBUTION,
       fetchedAt: Date.now(),
     });

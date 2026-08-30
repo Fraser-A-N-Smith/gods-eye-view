@@ -13,6 +13,7 @@ import {
   parseDonkiNotifications,
   parseNeoFeed,
   parseRadioBlackoutScale,
+  mergeSpaceWeatherPayload,
 } from './spaceWeatherShape.js';
 
 test('Kp bands are ordered, distinct, and each names an operational effect', () => {
@@ -290,4 +291,180 @@ test('a missing R entry is null, not a guessed scale', () => {
   for (const input of [null, undefined, {}, { '0': {} }, { '0': { R: null } }, 'nope']) {
     assert.equal(parseRadioBlackoutScale(input), null);
   }
+});
+
+// ── mergeSpaceWeatherPayload — the proxy's per-source independent-failure
+// guarantee, pulled out of vite.config.js so it is unit-testable here rather
+// than only verifiable by reading the proxy's closure. ────────────────────
+
+/** A settled aurora fetch carrying one real cell, well above threshold. */
+function fulfilledAurora() {
+  return {
+    status: 'fulfilled',
+    value: {
+      'Observation Time': '2026-08-30T12:00:00Z',
+      'Forecast Time': '2026-08-30T13:00:00Z',
+      coordinates: [[10, 70, 60]],
+    },
+  };
+}
+
+/** A settled Kp fetch reporting a live, non-quiet index. */
+function fulfilledKp() {
+  return {
+    status: 'fulfilled',
+    value: [
+      ['time_tag', 'Kp'],
+      ['2026-08-29T21:00:00', '6.33'],
+    ],
+  };
+}
+
+function fulfilledDonki() {
+  return {
+    status: 'fulfilled',
+    value: [{
+      messageType: 'CME',
+      messageID: 'evt-1',
+      messageIssueTime: '2026-08-29T12:00:00Z',
+      messageURL: 'https://example.test/evt-1',
+      messageBody: '## Summary:\n\nA CME left the sun.\n\n## Notes:\nmore',
+    }],
+  };
+}
+
+function fulfilledNeo() {
+  return {
+    status: 'fulfilled',
+    value: {
+      near_earth_objects: {
+        '2026-08-30': [{
+          id: '222',
+          name: '(2026 BB2)',
+          is_potentially_hazardous_asteroid: true,
+          estimated_diameter: { meters: { estimated_diameter_min: 100, estimated_diameter_max: 220 } },
+          close_approach_data: [{
+            miss_distance: { kilometers: '900000' },
+            relative_velocity: { kilometers_per_second: '30.1' },
+            epoch_date_close_approach: 1756541000000,
+          }],
+        }],
+      },
+    },
+  };
+}
+
+function fulfilledScales() {
+  return { status: 'fulfilled', value: { '0': { R: { Scale: '2', Text: 'Moderate radio blackout' } } } };
+}
+
+function rejected(message = 'upstream unavailable') {
+  return { status: 'rejected', reason: new Error(message) };
+}
+
+test('DONKI rejected alone leaves aurora and Kp intact, and empties only solarEvents', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: rejected('DONKI 429'),
+    neoResult: fulfilledNeo(),
+    scalesResult: fulfilledScales(),
+  });
+  assert.equal(merged.aurora.length, 1, 'aurora untouched by an unrelated DONKI rejection');
+  assert.ok(Math.abs(merged.kp - 6.33) < 1e-9, 'Kp untouched by an unrelated DONKI rejection');
+  assert.equal(merged.kpAvailable, true);
+  assert.deepEqual(merged.solarEvents, []);
+  assert.equal(merged.closeApproaches.length, 1, 'the OTHER optional sources are also untouched');
+  assert.deepEqual(merged.radioBlackoutScale, { scale: '2', text: 'Moderate radio blackout' });
+});
+
+test('NeoWs rejected alone leaves everything else intact, and empties only closeApproaches', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: fulfilledDonki(),
+    neoResult: rejected('NeoWs 429'),
+    scalesResult: fulfilledScales(),
+  });
+  assert.equal(merged.aurora.length, 1);
+  assert.ok(Math.abs(merged.kp - 6.33) < 1e-9);
+  assert.equal(merged.solarEvents.length, 1);
+  assert.deepEqual(merged.closeApproaches, []);
+  assert.deepEqual(merged.radioBlackoutScale, { scale: '2', text: 'Moderate radio blackout' });
+});
+
+test('NOAA scales rejected alone leaves everything else intact, and nulls only radioBlackoutScale', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: fulfilledDonki(),
+    neoResult: fulfilledNeo(),
+    scalesResult: rejected('noaa-scales.json 500'),
+  });
+  assert.equal(merged.aurora.length, 1);
+  assert.ok(Math.abs(merged.kp - 6.33) < 1e-9);
+  assert.equal(merged.solarEvents.length, 1);
+  assert.equal(merged.closeApproaches.length, 1);
+  assert.equal(merged.radioBlackoutScale, null);
+});
+
+test('THE RISK CASE: all three new sources rejected simultaneously still leaves aurora and Kp intact', () => {
+  // This is the exact scenario the task exists to guard: a bad refactor of
+  // the merge step letting the new sources' failures blank the pre-existing
+  // aurora/Kp contract.
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: rejected('DONKI down'),
+    neoResult: rejected('NeoWs down'),
+    scalesResult: rejected('NOAA scales down'),
+  });
+  assert.equal(merged.aurora.length, 1, 'aurora survives all three panel sources failing at once');
+  assert.ok(Math.abs(merged.kp - 6.33) < 1e-9, 'Kp survives all three panel sources failing at once');
+  assert.equal(merged.kpAvailable, true);
+  assert.deepEqual(merged.solarEvents, []);
+  assert.deepEqual(merged.closeApproaches, []);
+  assert.equal(merged.radioBlackoutScale, null);
+});
+
+test('a missing Kp alongside all three panel sources failing still draws the aurora oval', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: rejected('Kp product down'),
+    donkiResult: rejected('DONKI down'),
+    neoResult: rejected('NeoWs down'),
+    scalesResult: rejected('NOAA scales down'),
+  });
+  assert.equal(merged.aurora.length, 1);
+  assert.equal(merged.kp, null);
+  assert.equal(merged.kpAvailable, false);
+  assert.deepEqual(merged.solarEvents, []);
+  assert.deepEqual(merged.closeApproaches, []);
+  assert.equal(merged.radioBlackoutScale, null);
+});
+
+test('aurora rejected still throws — the one source whose failure is fatal, unchanged by this refactor', () => {
+  assert.throws(
+    () => mergeSpaceWeatherPayload({
+      auroraResult: rejected('ovation_aurora_latest.json 500'),
+      kpResult: fulfilledKp(),
+      donkiResult: fulfilledDonki(),
+      neoResult: fulfilledNeo(),
+      scalesResult: fulfilledScales(),
+    }),
+    /aurora_latest/,
+  );
+});
+
+test('aurora rejected throws even when every other source also failed', () => {
+  assert.throws(
+    () => mergeSpaceWeatherPayload({
+      auroraResult: rejected('ovation down'),
+      kpResult: rejected('kp down'),
+      donkiResult: rejected('donki down'),
+      neoResult: rejected('neo down'),
+      scalesResult: rejected('scales down'),
+    }),
+    /ovation down/,
+  );
 });

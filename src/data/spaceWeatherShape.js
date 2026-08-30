@@ -256,6 +256,69 @@ export function parseRadioBlackoutScale(payload) {
 }
 
 /**
+ * Merge the five `Promise.allSettled` results from `spaceWeatherProxy`'s
+ * upstream fan-out (aurora, Kp, DONKI, NeoWs, NOAA scales) into the payload
+ * the client layer consumes.
+ *
+ * Pulled out of `vite.config.js` so the per-source independent-failure
+ * guarantee — a DONKI/NeoWs/NOAA-scales rejection blanks only its own field
+ * and never touches the aurora oval or Kp index, and (the reverse) a
+ * rejection of any of the four optional sources never blanks any of the
+ * others — is a plain, directly unit-testable function rather than
+ * something only verifiable by reading the proxy's closure. If that merge
+ * step is ever refactored and accidentally lets one rejection blank another
+ * source's data, a test here catches it; nothing else in this codebase
+ * exercises a `refreshUpstream` merge step this way, which is exactly why
+ * this one is worth pulling out.
+ *
+ * The aurora result is the sole exception to "independent": it is required,
+ * so a rejected `auroraResult` re-throws its rejection reason here rather
+ * than degrading — the proxy has nothing worth serving without it, and the
+ * caller (`spaceWeatherProxy.refreshUpstream`) is expected to let that throw
+ * propagate into its existing stale-cache/502 handling unchanged.
+ *
+ * @param {object} results
+ * @param {PromiseSettledResult<*>} results.auroraResult
+ * @param {PromiseSettledResult<*>} results.kpResult
+ * @param {PromiseSettledResult<*>} results.donkiResult
+ * @param {PromiseSettledResult<*>} results.neoResult
+ * @param {PromiseSettledResult<*>} results.scalesResult
+ * @returns {object} The merged payload (pre-`JSON.stringify`; the proxy adds
+ *   `attribution`/`fetchedAt` on top).
+ * @throws {*} `auroraResult.reason` when the aurora fetch itself failed.
+ */
+export function mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult }) {
+  if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
+  const aurora = parseAuroraGrid(auroraResult.value);
+  const kp = kpResult.status === 'fulfilled'
+    ? parsePlanetaryKp(kpResult.value)
+    : { kp: null, timeTag: null };
+  const solarEvents = donkiResult.status === 'fulfilled'
+    ? parseDonkiNotifications(donkiResult.value)
+    : [];
+  const closeApproaches = neoResult.status === 'fulfilled'
+    ? parseNeoFeed(neoResult.value)
+    : [];
+  const radioBlackoutScale = scalesResult.status === 'fulfilled'
+    ? parseRadioBlackoutScale(scalesResult.value)
+    : null;
+
+  return {
+    aurora: aurora.points,
+    auroraPeak: aurora.peak,
+    observedAt: aurora.observedAt,
+    forecastAt: aurora.forecastAt,
+    gridDropped: aurora.dropped,
+    kp: kp.kp,
+    kpTimeTag: kp.timeTag,
+    kpAvailable: kpResult.status === 'fulfilled',
+    solarEvents,
+    closeApproaches,
+    radioBlackoutScale,
+  };
+}
+
+/**
  * Aurora probability → display colour and size.
  * @param {number} probability 0–100.
  * @returns {{css:string, alpha:number, pixelSize:number}}

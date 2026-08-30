@@ -174,7 +174,9 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
         state.forecastAt = payload.forecastAt || null;
         state.solarEvents = Array.isArray(payload.solarEvents) ? payload.solarEvents : [];
         state.closeApproaches = Array.isArray(payload.closeApproaches) ? payload.closeApproaches : [];
-        state.radioBlackoutScale = payload.radioBlackoutScale && typeof payload.radioBlackoutScale === 'object'
+        state.radioBlackoutScale = payload.radioBlackoutScale
+          && typeof payload.radioBlackoutScale === 'object'
+          && !Array.isArray(payload.radioBlackoutScale)
           ? payload.radioBlackoutScale
           : null;
         state.lastUpdate = Date.now();

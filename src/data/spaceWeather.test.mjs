@@ -159,6 +159,20 @@ test('a non-array solarEvents/closeApproaches or non-object radioBlackoutScale o
   assert.equal(stats.radioBlackoutScale, null);
 });
 
+test('an array radioBlackoutScale on the wire is rejected too — typeof [] === "object" is not enough', async () => {
+  // A bare typeof-object check would let an array through as if it were the
+  // {scale, text} record; this pins the Array.isArray guard.
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ aurora: [], kpAvailable: false, radioBlackoutScale: ['2', 'Moderate'] }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  assert.equal(layer.getStats().radioBlackoutScale, null);
+});
+
 test('HTTP, malformed, and network failures each degrade honestly', async () => {
   const http = createSpaceWeatherLayer({ fetchImpl: async () => ({ ok: false, status: 500 }) });
   http.enable();
