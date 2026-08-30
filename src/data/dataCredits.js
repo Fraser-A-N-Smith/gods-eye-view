@@ -134,6 +134,12 @@ export const DATA_CREDITS = [
       '(US public domain)',
   },
   {
+    key: 'pskreporter',
+    html:
+      'Amateur radio propagation spots: ' +
+      '<a href="https://pskreporter.info" target="_blank" rel="noopener">PSKReporter.info</a>',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

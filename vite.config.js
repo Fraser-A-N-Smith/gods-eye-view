@@ -46,6 +46,7 @@ import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
+import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -2585,6 +2586,134 @@ function oceanBuoysProxy() {
 
   return {
     name: 'ocean-buoys-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Ham Radio Propagation proxy — PSKReporter.info amateur radio reception
+ * reports (FT8, trailing 15 minutes).
+ *
+ * The upstream is keyless and public, but it is XML (not JSON) and a direct
+ * browser fetch cannot be trusted to receive permissive CORS headers (same
+ * reasoning as `spaceWeatherProxy` above). This proxy fetches it, parses and
+ * decodes both Maidenhead locators to lat/lon server-side, and serves
+ * `{ spots: [...], retrievedAt }` so the browser never re-parses XML or
+ * re-decodes a grid square.
+ *
+ * The XML parser and Maidenhead decoder (`parsePskReporterXml` /
+ * `maidenheadToLatLon`) live in the Cesium-free
+ * `src/data/hamRadioPropagationShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js` precedent) and are imported directly above — this
+ * proxy and the browser layer run the SAME implementation, so there is
+ * nothing here to fall out of sync. `hamRadioPropagationShape.test.mjs`
+ * covers the parser/decoder contract once.
+ *
+ * PSKReporter's developer page explicitly asks for no more than one poll
+ * every 5 minutes — `TTL_MS` below is not just a perf cache, it is what
+ * keeps this app compliant with that policy no matter how many browser tabs
+ * are open, in lockstep with `updateInterval: 300000` on the client layer.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function hamRadioProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_SPOTS = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ham-radio-v1.json');
+  const SPOTS_URL = 'https://retrieve.pskreporter.info/query?mode=FT8&rptlimit=200&flowStartSeconds=-900';
+  const ATTRIBUTION = 'PSKReporter.info (courtesy attribution)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[ham-radio-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(SPOTS_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const spots = parsePskReporterXml(text);
+
+    const body = JSON.stringify({
+      spots: spots.slice(0, MAX_SPOTS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/ham-radio', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'ham-radio', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[ham-radio-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Ham radio propagation unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'ham-radio-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -8755,6 +8884,7 @@ export default defineConfig(({ mode }) => {
       globalHazardsProxy(),
       volcanoesProxy(),
       oceanBuoysProxy(),
+      hamRadioProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),

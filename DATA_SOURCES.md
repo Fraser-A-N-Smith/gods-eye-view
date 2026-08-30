@@ -51,6 +51,7 @@ How to read this:
 | **NASA EONET** | Natural event tracker — severe storms, landslides, sea/lake ice, temperature extremes, dust/haze, snow, water color | US public domain | "NASA EONET" |
 | **Smithsonian Global Volcanism Program** | Volcanoes with eruptions since 1900 | Free public WFS service; citation requested | "Global Volcanism Program, Smithsonian Institution" |
 | **NOAA National Data Buoy Center** | Ocean buoy observations — wind, wave height, sea/air temperature | US public domain | "NOAA National Data Buoy Center" |
+| **PSKReporter** | Amateur (ham) radio propagation reception spots | Free public API; polled at most once per 5 minutes per PSKReporter's usage policy | "PSKReporter.info" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 
 ### Notes on the live sources
