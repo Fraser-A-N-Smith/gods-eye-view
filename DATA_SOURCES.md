@@ -47,6 +47,8 @@ How to read this:
 | **OpenSeaMap** | Sea-mark raster overlay — buoys, beacons, lighthouses, harbours | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSeaMap contributors" |
 | **OpenSnowMap** | Ski piste raster overlay — pistes, lifts, nordic trails | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSnowMap.org, © OpenStreetMap contributors" |
 | **NIFC / WFIGS** | Mapped wildfire perimeters (US interagency coverage) | US public domain (interagency wildland fire data) | "NIFC / WFIGS Interagency Wildland Fire Perimeters" |
+| **GDACS** | Global disaster alerts — floods and droughts | Free public API, no key, courtesy citation requested | "GDACS — Global Disaster Alert and Coordination System" |
+| **NASA EONET** | Natural event tracker — severe storms, landslides, sea/lake ice, temperature extremes, dust/haze, snow, water color | US public domain | "NASA EONET" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 
 ### Notes on the live sources

@@ -2176,6 +2176,205 @@ function spaceWeatherProxy() {
   };
 }
 
+/**
+ * Global Hazards proxy — GDACS (floods & droughts) merged with the NASA
+ * EONET categories no other layer already covers (severe storms,
+ * landslides, sea/lake ice, temperature extremes, dust/haze, snow, water
+ * color).
+ *
+ * Both upstreams are keyless and public, but neither reliably sends
+ * permissive CORS headers, so a direct browser fetch cannot be trusted
+ * (same reasoning as `spaceWeatherProxy` above). This proxy fetches both
+ * with `Promise.allSettled` — one upstream being down must not blank the
+ * other — filters and normalizes server-side, and serves the merged,
+ * capped result as `{ hazards: [...], retrievedAt }`.
+ *
+ * `mapGdacsFeatureServer`/`mapEonetFeatureServer` intentionally duplicate
+ * the pure `mapGdacsFeature`/`mapEonetFeature` filter logic in
+ * `src/data/globalHazards.js` rather than importing it: that client module
+ * imports the `cesium` package, which has no business loading into this
+ * Node-only config process. Keep the two copies in sync by hand;
+ * `globalHazards.test.mjs` pins the exact rule set.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function globalHazardsProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_HAZARDS = 400;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'global-hazards-v1.json');
+  const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH';
+  const EONET_URL = 'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=300';
+  const ATTRIBUTION = 'GDACS — Global Disaster Alert and Coordination System / NASA EONET';
+
+  const GDACS_TYPES = new Set(['FL', 'DR']);
+  const EONET_CATEGORIES = new Set([
+    'severeStorms', 'landslides', 'seaLakeIce', 'tempExtremes', 'dustHaze', 'snow', 'waterColor',
+  ]);
+
+  function mapGdacsFeatureServer(feature) {
+    const p = feature?.properties;
+    if (!p || !GDACS_TYPES.has(p.eventtype)) return null;
+    if (p.iscurrent !== 'true' || p.alertlevel === 'Green') return null;
+    const [lon, lat] = feature.geometry?.coordinates || [];
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+    return {
+      id: `gdacs:${p.eventtype}:${p.eventid}`,
+      source: 'GDACS',
+      kind: p.eventtype,
+      title: p.name || p.description || 'GDACS event',
+      lat,
+      lon,
+      severity: p.alertlevel || 'Orange',
+      url: p.url?.report || null,
+      dateMs: Date.parse(p.datemodified || p.fromdate || '') || null,
+    };
+  }
+
+  function mapEonetFeatureServer(event) {
+    const categoryId = event?.categories?.[0]?.id;
+    if (!categoryId || !EONET_CATEGORIES.has(categoryId)) return null;
+    const geom = Array.isArray(event.geometry) ? event.geometry.at(-1) : null;
+    const [lon, lat] = geom?.coordinates || [];
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+    return {
+      id: `eonet:${event.id}`,
+      source: 'EONET',
+      kind: categoryId,
+      title: event.title || 'EONET event',
+      lat,
+      lon,
+      severity: 'Orange',
+      url: event.link || null,
+      dateMs: Date.parse(geom?.date || '') || null,
+    };
+  }
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[global-hazards-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchJson(url) {
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    return JSON.parse(text);
+  }
+
+  async function refreshUpstream() {
+    // Neither upstream is required by itself — one being down degrades the
+    // merged set rather than blanking the layer, matching the significance
+    // filtering the two mappers already apply feature-by-feature.
+    const [gdacsResult, eonetResult] = await Promise.allSettled([
+      fetchJson(GDACS_URL),
+      fetchJson(EONET_URL),
+    ]);
+    if (gdacsResult.status !== 'fulfilled' && eonetResult.status !== 'fulfilled') {
+      throw gdacsResult.reason;
+    }
+
+    const hazards = [];
+    if (gdacsResult.status === 'fulfilled') {
+      const features = Array.isArray(gdacsResult.value?.features) ? gdacsResult.value.features : [];
+      for (const feature of features) {
+        const mapped = mapGdacsFeatureServer(feature);
+        if (mapped) hazards.push(mapped);
+      }
+    } else {
+      console.warn(`[global-hazards-proxy] GDACS fetch failed: ${gdacsResult.reason?.message || gdacsResult.reason}`);
+    }
+    if (eonetResult.status === 'fulfilled') {
+      const events = Array.isArray(eonetResult.value?.events) ? eonetResult.value.events : [];
+      for (const event of events) {
+        const mapped = mapEonetFeatureServer(event);
+        if (mapped) hazards.push(mapped);
+      }
+    } else {
+      console.warn(`[global-hazards-proxy] EONET fetch failed: ${eonetResult.reason?.message || eonetResult.reason}`);
+    }
+
+    const body = JSON.stringify({
+      hazards: hazards.slice(0, MAX_HAZARDS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/global-hazards', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'global-hazards', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[global-hazards-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Global hazards unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'global-hazards-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
 
 /**
  * NOAA weather proxy — NWS active alerts and NHC tropical cyclones.
@@ -8339,6 +8538,7 @@ export default defineConfig(({ mode }) => {
       firePerimetersProxy(),
       gdeltEventsProxy(),
       spaceWeatherProxy(),
+      globalHazardsProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),

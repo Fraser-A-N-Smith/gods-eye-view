@@ -7,6 +7,7 @@ import militaryFlightsLayer from './data/militaryFlights.js';
 import earthquakesLayer from './data/earthquakes.js';
 import firePerimetersLayer from './data/firePerimeters.js';
 import gdeltEventsLayer from './data/gdeltEvents.js';
+import globalHazardsLayer from './data/globalHazards.js';
 import spaceWeatherLayer from './data/spaceWeather.js';
 import weatherAlertsLayer from './data/weatherAlerts.js';
 import tropicalCyclonesLayer from './data/tropicalCyclones.js';
@@ -278,6 +279,7 @@ async function init() {
     dataManager.register(earthquakesLayer);
     dataManager.register(firePerimetersLayer);
     dataManager.register(gdeltEventsLayer);
+    dataManager.register(globalHazardsLayer);
     dataManager.register(spaceWeatherLayer);
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);

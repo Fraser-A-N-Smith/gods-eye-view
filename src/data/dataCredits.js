@@ -109,6 +109,18 @@ export const DATA_CREDITS = [
       '(location-matched article links; publisher terms apply)',
   },
   {
+    key: 'gdacs',
+    html:
+      'Global hazard alerts (floods, droughts): ' +
+      '<a href="https://www.gdacs.org" target="_blank" rel="noopener">GDACS — Global Disaster Alert and Coordination System</a>',
+  },
+  {
+    key: 'eonet',
+    html:
+      'Global hazard events (severe storms, landslides, sea ice, temperature extremes): ' +
+      '<a href="https://eonet.gsfc.nasa.gov" target="_blank" rel="noopener">NASA EONET</a>',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +
