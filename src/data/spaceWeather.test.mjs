@@ -91,6 +91,88 @@ test('a missing Kp still draws the oval — the index is optional, the grid is n
   assert.match(layer.getStats().status, /KP UNKNOWN/);
 });
 
+test('solarEvents, closeApproaches and radioBlackoutScale are [] / [] / null when the proxy omits them', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ aurora: [], kpAvailable: false }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.deepEqual(stats.solarEvents, []);
+  assert.deepEqual(stats.closeApproaches, []);
+  assert.equal(stats.radioBlackoutScale, null);
+  assert.notEqual(stats.solarEvents, undefined);
+  assert.notEqual(stats.closeApproaches, undefined);
+});
+
+test('a merged payload carrying DONKI, NeoWs and NOAA-scales data surfaces all three on getStats()', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [],
+        kpAvailable: false,
+        solarEvents: [
+          { id: 'evt-1', type: 'CME', issuedMs: 1756540800000, summary: 'A CME left the sun.', url: 'https://example.test/evt-1' },
+        ],
+        closeApproaches: [
+          { id: '222', name: '(2026 BB2)', missDistanceKm: 900000, velocityKmS: 30.1, diameterMinM: 100, diameterMaxM: 220, hazardous: true, closeApproachMs: 1756541000000 },
+        ],
+        radioBlackoutScale: { scale: '2', text: 'Moderate radio blackout' },
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.equal(stats.solarEvents.length, 1);
+  assert.equal(stats.solarEvents[0].id, 'evt-1');
+  assert.equal(stats.closeApproaches.length, 1);
+  assert.equal(stats.closeApproaches[0].hazardous, true);
+  assert.deepEqual(stats.radioBlackoutScale, { scale: '2', text: 'Moderate radio blackout' });
+  // The aurora/Kp contract is unaffected by the presence of the panel fields.
+  assert.equal(stats.count, 0);
+  assert.match(stats.status, /KP UNKNOWN/);
+});
+
+test('a non-array solarEvents/closeApproaches or non-object radioBlackoutScale on the wire degrades to the safe default rather than propagating junk', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [],
+        kpAvailable: false,
+        solarEvents: 'not-an-array',
+        closeApproaches: null,
+        radioBlackoutScale: 'not-an-object',
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.deepEqual(stats.solarEvents, []);
+  assert.deepEqual(stats.closeApproaches, []);
+  assert.equal(stats.radioBlackoutScale, null);
+});
+
+test('an array radioBlackoutScale on the wire is rejected too — typeof [] === "object" is not enough', async () => {
+  // A bare typeof-object check would let an array through as if it were the
+  // {scale, text} record; this pins the Array.isArray guard.
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ aurora: [], kpAvailable: false, radioBlackoutScale: ['2', 'Moderate'] }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  assert.equal(layer.getStats().radioBlackoutScale, null);
+});
+
 test('HTTP, malformed, and network failures each degrade honestly', async () => {
   const http = createSpaceWeatherLayer({ fetchImpl: async () => ({ ok: false, status: 500 }) });
   http.enable();

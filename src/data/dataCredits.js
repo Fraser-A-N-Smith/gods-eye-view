@@ -109,6 +109,63 @@ export const DATA_CREDITS = [
       '(location-matched article links; publisher terms apply)',
   },
   {
+    key: 'gdacs',
+    html:
+      'Global hazard alerts (floods, droughts): ' +
+      '<a href="https://www.gdacs.org" target="_blank" rel="noopener">GDACS — Global Disaster Alert and Coordination System</a>',
+  },
+  {
+    key: 'eonet',
+    html:
+      'Global hazard events (severe storms, landslides, sea ice, temperature extremes): ' +
+      '<a href="https://eonet.gsfc.nasa.gov" target="_blank" rel="noopener">NASA EONET</a>',
+  },
+  {
+    key: 'gvp',
+    html:
+      'Volcano data: Global Volcanism Program, Smithsonian Institution — ' +
+      '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
+  },
+  {
+    key: 'ndbc',
+    html:
+      'Ocean buoy observations: NOAA National Data Buoy Center — ' +
+      '<a href="https://www.ndbc.noaa.gov" target="_blank" rel="noopener">ndbc.noaa.gov</a> ' +
+      '(US public domain)',
+  },
+  {
+    key: 'pskreporter',
+    html:
+      'Amateur radio propagation spots: ' +
+      '<a href="https://pskreporter.info" target="_blank" rel="noopener">PSKReporter.info</a>',
+  },
+  {
+    key: 'cbp-bwt',
+    html:
+      'Land border crossing wait times: U.S. Customs and Border Protection — ' +
+      '<a href="https://bwt.cbp.gov" target="_blank" rel="noopener">Border Wait Times</a> ' +
+      '(US public domain; major crossings only)',
+  },
+  {
+    key: 'cneos-fireball',
+    html:
+      'Fireball/bolide detections: ' +
+      '<a href="https://cneos.jpl.nasa.gov/fireballs/" target="_blank" rel="noopener">NASA/JPL CNEOS Fireball Data API</a> ' +
+      '(US public domain)',
+  },
+  {
+    key: 'donki',
+    html:
+      'Solar event notifications (CMEs, flares): ' +
+      '<a href="https://ccmc.gsfc.nasa.gov/tools/DONKI/" target="_blank" rel="noopener">NASA DONKI</a>',
+  },
+  {
+    key: 'neows',
+    html:
+      'Near-Earth object close approaches: ' +
+      '<a href="https://api.nasa.gov/" target="_blank" rel="noopener">NASA NeoWs — Near Earth Object Web Service</a>',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

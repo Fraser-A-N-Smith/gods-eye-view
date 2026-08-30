@@ -42,7 +42,14 @@ import {
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
-import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
+import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
+import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
+import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
+import { parseNdbcText } from './src/data/oceanBuoysShape.js';
+import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
+import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
+import { mapFireballRows } from './src/data/fireballsShape.js';
+import { mapOverpassElement } from './src/data/criticalInfrastructureShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -432,6 +439,7 @@ function makeRateLimiter({ windowMs, max, globalMax }) {
 }
 const _overpassRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
 const _militaryInstallationsRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
+const _criticalInfrastructureRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 90, globalMax: 300 });
 const _routeRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 60, globalMax: 200 });
 
 /**
@@ -2045,20 +2053,48 @@ function gdeltEventsProxy() {
  *  2. **CORS.** services.swpc.noaa.gov does not reliably send permissive CORS
  *     headers, and a keyless source is no use if the browser refuses to read it.
  *
- * The two upstream products are fetched together and merged, because the layer
- * is meaningless with only one of them: an aurora oval with no Kp cannot say
- * what it implies, and a Kp with no oval has nothing to draw.
+ * The aurora and Kp products are fetched together and merged, because the
+ * layer is meaningless with only one of them: an aurora oval with no Kp
+ * cannot say what it implies, and a Kp with no oval has nothing to draw.
+ * Three more sources feed the panel only — DONKI solar-event notifications,
+ * NeoWs near-Earth-object close approaches (no surface coordinate, so no
+ * globe entity), and the NOAA R-scale radio-blackout reading. Each of the
+ * three is independently optional: none of them can blank the aurora/Kp
+ * pair, and the aurora/Kp pair failing does not touch the panel fields
+ * (`fetchJson` on the aurora URL still throws first, same as before).
  *
  * @returns {import('vite').Plugin}
  */
 function spaceWeatherProxy() {
-  // OVATION republishes about every 5 minutes; Kp is 3-hourly.
+  // OVATION republishes about every 5 minutes; Kp is 3-hourly. DONKI, NeoWs
+  // and the NOAA scales product are all low-volume and cheap to refetch at
+  // the same cadence, so they share this TTL rather than getting their own.
   const TTL_MS = 4 * 60 * 1000;
   const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
   const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'space-weather-v1.json');
   const AURORA_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
   const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
+  const NOAA_SCALES_URL = 'https://services.swpc.noaa.gov/products/noaa-scales.json';
   const ATTRIBUTION = 'NOAA / NWS Space Weather Prediction Center (US public domain)';
+
+  // api.nasa.gov (DONKI, NeoWs, and the rest of the NASA-family APIs) accepts
+  // the shared public DEMO_KEY out of the box, at a lower rate limit than a
+  // registered key. NASA_API_KEY is optional — same shape as LL2_API_TOKEN
+  // above: unset means "use the keyless default", not "fail".
+  const nasaApiKey = () => String(process.env.NASA_API_KEY || '').trim() || 'DEMO_KEY';
+  const donkiUrl = () => {
+    const toIsoDate = (d) => d.toISOString().slice(0, 10);
+    const end = new Date();
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return 'https://api.nasa.gov/DONKI/notifications' +
+      `?startDate=${toIsoDate(start)}&endDate=${toIsoDate(end)}&type=CME,FLR` +
+      `&api_key=${encodeURIComponent(nasaApiKey())}`;
+  };
+  const neoWsUrl = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    return 'https://api.nasa.gov/neo/rest/v1/feed' +
+      `?start_date=${today}&end_date=${today}&api_key=${encodeURIComponent(nasaApiKey())}`;
+  };
 
   let cache = null;
   let diskLoaded = false;
@@ -2103,29 +2139,29 @@ function spaceWeatherProxy() {
   }
 
   async function refreshUpstream() {
-    // The aurora grid is required; the Kp index is not. A missing Kp degrades
-    // the readout to UNKNOWN rather than failing the whole layer, because the
-    // oval is still worth drawing without it.
-    const [auroraResult, kpResult] = await Promise.allSettled([
+    // The aurora grid is required; everything else is not. A missing Kp
+    // degrades the readout to UNKNOWN rather than failing the whole layer,
+    // because the oval is still worth drawing without it — and the same
+    // per-source null-safety extends to the three panel-only additions: a
+    // DONKI, NeoWs, or NOAA-scales outage empties/nulls only its own field.
+    const [auroraResult, kpResult, donkiResult, neoResult, scalesResult] = await Promise.allSettled([
       fetchJson(AURORA_URL),
       fetchJson(KP_URL),
+      fetchJson(donkiUrl()),
+      fetchJson(neoWsUrl()),
+      fetchJson(NOAA_SCALES_URL),
     ]);
-    if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
 
-    const aurora = parseAuroraGrid(auroraResult.value);
-    const kp = kpResult.status === 'fulfilled'
-      ? parsePlanetaryKp(kpResult.value)
-      : { kp: null, timeTag: null };
+    // Merge (including the "aurora is required, everything else is
+    // optional" gate) is a pure function in spaceWeatherShape.js
+    // (mergeSpaceWeatherPayload) rather than inline here, specifically so
+    // the independent-failure guarantee is directly unit-testable — see that
+    // function's doc comment. A rejected aurora result throws out of the
+    // call below, same as the inline check this replaced.
+    const merged = mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult });
 
     const body = JSON.stringify({
-      aurora: aurora.points,
-      auroraPeak: aurora.peak,
-      observedAt: aurora.observedAt,
-      forecastAt: aurora.forecastAt,
-      gridDropped: aurora.dropped,
-      kp: kp.kp,
-      kpTimeTag: kp.timeTag,
-      kpAvailable: kpResult.status === 'fulfilled',
+      ...merged,
       attribution: ATTRIBUTION,
       fetchedAt: Date.now(),
     });
@@ -2176,6 +2212,828 @@ function spaceWeatherProxy() {
   };
 }
 
+/**
+ * Global Hazards proxy — GDACS (floods & droughts) merged with the NASA
+ * EONET categories no other layer already covers (severe storms,
+ * landslides, sea/lake ice, temperature extremes, dust/haze, snow, water
+ * color).
+ *
+ * Both upstreams are keyless and public, but neither reliably sends
+ * permissive CORS headers, so a direct browser fetch cannot be trusted
+ * (same reasoning as `spaceWeatherProxy` above). This proxy fetches both
+ * with `Promise.allSettled` — one upstream being down must not blank the
+ * other — filters and normalizes server-side, and serves the merged,
+ * capped result as `{ hazards: [...], retrievedAt }`.
+ *
+ * The actual GDACS/EONET filter and mapping rules live in the Cesium-free
+ * `src/data/globalHazardsShape.js` (mirroring the existing
+ * `spaceWeatherShape.js` precedent) and are imported directly below — this
+ * proxy and the browser layer run the SAME `mapGdacsFeature`/
+ * `mapEonetFeature` implementation, so there is nothing here to fall out of
+ * sync. `globalHazardsShape.test.mjs` covers the filter contract once.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function globalHazardsProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_HAZARDS = 400;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'global-hazards-v1.json');
+  const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH';
+  const EONET_URL = 'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=300';
+  const ATTRIBUTION = 'GDACS — Global Disaster Alert and Coordination System / NASA EONET';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[global-hazards-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchJson(url) {
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    return JSON.parse(text);
+  }
+
+  async function refreshUpstream() {
+    // Neither upstream is required by itself — one being down degrades the
+    // merged set rather than blanking the layer, matching the significance
+    // filtering the two mappers already apply feature-by-feature.
+    const [gdacsResult, eonetResult] = await Promise.allSettled([
+      fetchJson(GDACS_URL),
+      fetchJson(EONET_URL),
+    ]);
+    if (gdacsResult.status !== 'fulfilled' && eonetResult.status !== 'fulfilled') {
+      console.warn(`[global-hazards-proxy] GDACS fetch failed: ${gdacsResult.reason?.message || gdacsResult.reason}`);
+      console.warn(`[global-hazards-proxy] EONET fetch failed: ${eonetResult.reason?.message || eonetResult.reason}`);
+      throw gdacsResult.reason;
+    }
+
+    const hazards = [];
+    if (gdacsResult.status === 'fulfilled') {
+      const features = Array.isArray(gdacsResult.value?.features) ? gdacsResult.value.features : [];
+      for (const feature of features) {
+        const mapped = mapGdacsFeature(feature);
+        if (mapped) hazards.push(mapped);
+      }
+    } else {
+      console.warn(`[global-hazards-proxy] GDACS fetch failed: ${gdacsResult.reason?.message || gdacsResult.reason}`);
+    }
+    if (eonetResult.status === 'fulfilled') {
+      const events = Array.isArray(eonetResult.value?.events) ? eonetResult.value.events : [];
+      for (const event of events) {
+        const mapped = mapEonetFeature(event);
+        if (mapped) hazards.push(mapped);
+      }
+    } else {
+      console.warn(`[global-hazards-proxy] EONET fetch failed: ${eonetResult.reason?.message || eonetResult.reason}`);
+    }
+
+    const body = JSON.stringify({
+      hazards: hazards.slice(0, MAX_HAZARDS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/global-hazards', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'global-hazards', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[global-hazards-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Global hazards unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'global-hazards-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Volcanoes proxy — Smithsonian Institution Global Volcanism Program (GVP)
+ * Holocene volcano inventory, filtered to recently active volcanoes.
+ *
+ * The upstream WFS service is keyless and public, but a direct browser fetch
+ * cannot be trusted to receive permissive CORS headers (same reasoning as
+ * `spaceWeatherProxy` above), so this proxy fetches it, filters, and
+ * normalizes server-side, serving `{ volcanoes: [...], retrievedAt }`.
+ *
+ * The filter (eruption since `MIN_ERUPTION_YEAR`) and field mapping live in
+ * the Cesium-free `src/data/volcanoesShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js` precedent) and are imported
+ * directly below — this proxy and the browser layer run the SAME
+ * `mapVolcanoFeature` implementation, so there is nothing here to fall out of
+ * sync. `volcanoesShape.test.mjs` covers the filter contract once.
+ *
+ * Unlike most feeds here, GVP eruption history is static-ish — it does not
+ * change day to day — so the TTL is a full 24 hours rather than minutes.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function volcanoesProxy() {
+  const TTL_MS = 24 * 60 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_VOLCANOES = 500;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'volcanoes-v1.json');
+  const VOLCANOES_URL = 'https://webservices.volcano.si.edu/geoserver/GVP-VOTW/ows'
+    + '?service=WFS&version=2.0.0&request=GetFeature'
+    + '&typeName=GVP-VOTW:Smithsonian_VOTW_Holocene_Volcanoes&outputFormat=json';
+  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[volcanoes-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(VOLCANOES_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const features = Array.isArray(parsed?.features) ? parsed.features : [];
+    const volcanoes = [];
+    for (const feature of features) {
+      const mapped = mapVolcanoFeature(feature);
+      if (mapped) volcanoes.push(mapped);
+    }
+
+    const body = JSON.stringify({
+      volcanoes: volcanoes.slice(0, MAX_VOLCANOES),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/volcanoes', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'volcanoes', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[volcanoes-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Volcanoes unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'volcanoes-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Ocean Buoys proxy — NOAA National Data Buoy Center (NDBC) `latest_obs.txt`,
+ * the latest observation from roughly 800 buoy and coastal stations
+ * worldwide.
+ *
+ * The upstream is keyless and public, but it is plain FIXED-WIDTH TEXT, not
+ * JSON — parsing that in the browser would mean shipping the raw feed (and
+ * its two `#`-prefixed header lines, and its `MM` missing-value markers)
+ * straight to every client. This proxy fetches it once, parses and
+ * normalizes server-side, and serves `{ buoys: [...], retrievedAt }`.
+ *
+ * The fixed-width parser (`parseNdbcLine`/`parseNdbcText`) lives in the
+ * Cesium-free `src/data/oceanBuoysShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`
+ * precedent) and is imported directly below — this proxy and the browser
+ * layer run the SAME `parseNdbcText` implementation, so there is nothing
+ * here to fall out of sync. `oceanBuoysShape.test.mjs` covers the parser
+ * contract once.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function oceanBuoysProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_BUOYS = 900;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ocean-buoys-v1.json');
+  const BUOYS_URL = 'https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt';
+  const ATTRIBUTION = 'NOAA National Data Buoy Center (US public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[ocean-buoys-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(BUOYS_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const buoys = parseNdbcText(text);
+
+    const body = JSON.stringify({
+      buoys: buoys.slice(0, MAX_BUOYS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/ocean-buoys', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'ocean-buoys', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[ocean-buoys-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Ocean buoys unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'ocean-buoys-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Ham Radio Propagation proxy — PSKReporter.info amateur radio reception
+ * reports (FT8, trailing 15 minutes).
+ *
+ * The upstream is keyless and public, but it is XML (not JSON) and a direct
+ * browser fetch cannot be trusted to receive permissive CORS headers (same
+ * reasoning as `spaceWeatherProxy` above). This proxy fetches it, parses and
+ * decodes both Maidenhead locators to lat/lon server-side, and serves
+ * `{ spots: [...], retrievedAt }` so the browser never re-parses XML or
+ * re-decodes a grid square.
+ *
+ * The XML parser and Maidenhead decoder (`parsePskReporterXml` /
+ * `maidenheadToLatLon`) live in the Cesium-free
+ * `src/data/hamRadioPropagationShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js` precedent) and are imported directly above — this
+ * proxy and the browser layer run the SAME implementation, so there is
+ * nothing here to fall out of sync. `hamRadioPropagationShape.test.mjs`
+ * covers the parser/decoder contract once.
+ *
+ * PSKReporter's developer page explicitly asks for no more than one poll
+ * every 5 minutes — `TTL_MS` below is not just a perf cache, it is what
+ * keeps this app compliant with that policy no matter how many browser tabs
+ * are open, in lockstep with `updateInterval: 300000` on the client layer.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function hamRadioProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_SPOTS = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ham-radio-v1.json');
+  const SPOTS_URL = 'https://retrieve.pskreporter.info/query?mode=FT8&rptlimit=200&flowStartSeconds=-900';
+  const ATTRIBUTION = 'PSKReporter.info (courtesy attribution)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[ham-radio-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(SPOTS_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const spots = parsePskReporterXml(text);
+
+    const body = JSON.stringify({
+      spots: spots.slice(0, MAX_SPOTS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/ham-radio', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'ham-radio', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[ham-radio-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Ham radio propagation unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'ham-radio-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Border Wait Times proxy — CBP live land-crossing wait times, joined
+ * server-side against a small bundled static locations lookup.
+ *
+ * `https://bwt.cbp.gov/api/waittimes` is keyless and public and returns a
+ * plain JSON array keyed by `port_number` — but it carries NO coordinates,
+ * and no companion endpoint with lat/lon exists (confirmed during planning:
+ * `/api/bwtPorts`, `/api/ports`, and several ArcGIS FeatureServer guesses
+ * were all tried and none returned usable data). Because of that, God's Eye
+ * View ships `config/cbp_port_locations.json` — a small, hand-verified
+ * `port_number -> {name, lat, lon}` lookup for the ~25 highest-traffic US
+ * land border crossings — and this proxy is where the live feed gets joined
+ * against it, ONCE, server-side, so the browser never re-runs that join nor
+ * ships the ~85-port raw feed (most of which has no plottable location) to
+ * every client.
+ *
+ * The join itself (`mapWaitTimeEntry`/`mapWaitTimeEntries`) lives in the
+ * Cesium-free `src/data/borderWaitTimesShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js`/`hamRadioPropagationShape.js` precedent) and is
+ * imported directly below — this proxy and the browser layer run the SAME
+ * join implementation, so there is nothing here to fall out of sync.
+ * `borderWaitTimes.test.mjs` covers the join contract once.
+ *
+ * The locations file is loaded once at module init and cached in memory
+ * (`loadLocations` below) — it is static bundled config, not re-read per
+ * request.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function borderWaitTimesProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'border-wait-times-v1.json');
+  const LOCATIONS_PATH = path.join(__dirname, 'config', 'cbp_port_locations.json');
+  const WAIT_TIMES_URL = 'https://bwt.cbp.gov/api/waittimes';
+  const ATTRIBUTION = 'U.S. Customs and Border Protection (US public domain; major crossings only)';
+
+  let cache = null;
+  let diskLoaded = false;
+  let locations = null;
+  const inFlight = new Map();
+
+  async function loadLocations() {
+    if (locations) return locations;
+    try {
+      locations = JSON.parse(await fsp.readFile(LOCATIONS_PATH, 'utf8'));
+    } catch (error) {
+      console.warn(`[border-wait-times-proxy] failed to load ${LOCATIONS_PATH}: ${error?.message || error}`);
+      locations = {};
+    }
+    return locations;
+  }
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[border-wait-times-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const [upstream, locationsLookup] = await Promise.all([
+      fetch(WAIT_TIMES_URL, { signal: AbortSignal.timeout(25000) }),
+      loadLocations(),
+    ]);
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const raw = JSON.parse(text);
+    const crossings = mapWaitTimeEntries(Array.isArray(raw) ? raw : [], locationsLookup);
+
+    const body = JSON.stringify({
+      crossings,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/border-wait-times', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'border-wait-times', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[border-wait-times-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Border wait times unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'border-wait-times-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Fireballs proxy — NASA/JPL Center for Near-Earth Object Studies (CNEOS)
+ * fireball/bolide atmospheric detections, trailing 90 days.
+ *
+ * The upstream is keyless and public, but its response is a **fields+rows**
+ * shape (`{fields: [...], data: [[...], ...]}`), not an array of objects —
+ * and `lat`/`lon` are unsigned magnitudes with separate `lat-dir`/`lon-dir`
+ * sign columns that must be applied before the values mean anything. This
+ * proxy fetches it once, zips fields+rows and applies the sign server-side,
+ * and serves `{ fireballs: [...normalized...], retrievedAt }` so the browser
+ * never re-does that join against the raw feed.
+ *
+ * The `date-min` query param is computed FRESH on every upstream refresh
+ * (`new Date(Date.now() - 90*86400000)`), not baked into a module-level
+ * constant — a constant would freeze at server start and the rolling
+ * 90-day window would silently stop rolling.
+ *
+ * The mapping itself (`mapFireballRow`/`mapFireballRows`) lives in the
+ * Cesium-free `src/data/fireballsShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js`/`hamRadioPropagationShape.js`/
+ * `criticalInfrastructureShape.js`/`borderWaitTimesShape.js` precedent) and
+ * is imported directly above — this proxy and the browser layer run the
+ * SAME mapping implementation, so there is nothing here to fall out of
+ * sync. `fireballsShape.test.mjs` covers the mapping contract once.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function fireballsProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const LIMIT = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'fireballs-v1.json');
+  const FIREBALL_URL = 'https://ssd-api.jpl.nasa.gov/fireball.api';
+  const ATTRIBUTION = 'NASA/JPL Center for Near-Earth Object Studies (US public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[fireballs-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    // Computed fresh on every refresh, never baked into a module-level
+    // constant — see the module doc comment above.
+    const dateMin = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const url = `${FIREBALL_URL}?date-min=${dateMin}&limit=${LIMIT}`;
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const raw = JSON.parse(text);
+    const fireballs = mapFireballRows(
+      Array.isArray(raw?.fields) ? raw.fields : [],
+      Array.isArray(raw?.data) ? raw.data : [],
+    );
+
+    const body = JSON.stringify({
+      fireballs,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/fireballs', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'fireballs', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[fireballs-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Fireballs unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'fireballs-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
 
 /**
  * NOAA weather proxy — NWS active alerts and NHC tropical cyclones.
@@ -7886,6 +8744,333 @@ function militaryInstallationsProxy() {
 }
 
 // ---------------------------------------------------------------------------
+// Critical Infrastructure proxy (OSM power plants + hospitals)
+// ---------------------------------------------------------------------------
+// Viewport-scoped, the same shape as the military-installation proxy above:
+// OSM has hundreds of thousands of hospitals and tens of thousands of power
+// plants worldwide, so this never answers a global query — only a bounded
+// bbox the client's current camera view actually covers. This proxy keeps its
+// OWN small cache/quantization scaffolding rather than reaching into the
+// military-installation one above — mirroring how every other domain-specific
+// proxy in this file (regional-brief, weather-effects, ocean-buoys, ...) owns
+// its own cache rather than sharing a sibling's, so neither layer's TTL,
+// element cap, or cache shape can drift the other out from under it.
+const CRITICAL_INFRASTRUCTURE_CACHE_MS = 5 * 60_000;
+const CRITICAL_INFRASTRUCTURE_STALE_MS = 60 * 60_000;
+const CRITICAL_INFRASTRUCTURE_MAX_CACHE = 80;
+const CRITICAL_INFRASTRUCTURE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/**
+ * Upstream element cap. A response that hits it exactly is SATURATED —
+ * Overpass truncated, so off-viewport features from the snapped bbox may
+ * have crowded out in-viewport ones. The client re-asks for the exact
+ * viewport in that case (see militaryInstallationsProxy's identical
+ * reasoning above).
+ */
+export const CRITICAL_INFRASTRUCTURE_ELEMENT_CAP = 300;
+/**
+ * Disk-cache TTL for mapped elements (ms) — 30 days. OSM power-plant and
+ * hospital tagging changes on a survey timescale, not a session one, the same
+ * reasoning militaryInstallationsProxy applies above.
+ */
+const CRITICAL_INFRASTRUCTURE_DISK_TTL_MS = 30 * 86_400_000;
+/** Disk-cache directory for mapped critical-infrastructure payloads. */
+const CRITICAL_INFRASTRUCTURE_DISK_DIR = path.join(process.cwd(), '.gev-cache', 'critical-infrastructure');
+/**
+ * Cache-key grid step in degrees (~5.5 km) — snapping the request bbox
+ * outward onto this grid lets neighbouring viewports share one cache entry.
+ */
+const CRITICAL_INFRASTRUCTURE_BBOX_STEP_DEG = 0.05;
+const _criticalInfrastructureCache = new Map();
+const _criticalInfrastructureInFlight = new Map();
+
+/**
+ * Snap a request bbox outward onto the shared critical-infrastructure cache
+ * grid. See quantizeMilitaryInstallationBox above for the full rationale.
+ * @param {{south:number, west:number, north:number, east:number}} box
+ * @param {number} [stepDeg]
+ * @returns {{south:number, west:number, north:number, east:number}}
+ */
+export function quantizeCriticalInfrastructureBox(box, stepDeg = CRITICAL_INFRASTRUCTURE_BBOX_STEP_DEG) {
+  const snap = (value, grow) => {
+    const cells = Number((value / stepDeg).toFixed(9));
+    return Number(((grow > 0 ? Math.ceil(cells) : Math.floor(cells)) * stepDeg).toFixed(6));
+  };
+  return {
+    south: Math.max(-90, snap(box.south, -1)),
+    west: Math.max(-180, snap(box.west, -1)),
+    north: Math.min(90, snap(box.north, 1)),
+    east: Math.min(180, snap(box.east, 1)),
+  };
+}
+
+/**
+ * Stable disk/memory cache key for a critical-infrastructure bbox. See
+ * militaryInstallationCacheKey above for why the precision must track the
+ * precision the query actually used.
+ * @param {{south:number, west:number, north:number, east:number}} box
+ * @param {number} [decimals]
+ */
+export function criticalInfrastructureCacheKey(box, decimals = 3) {
+  return [box.south, box.west, box.north, box.east]
+    .map((value) => value.toFixed(decimals))
+    .join(',');
+}
+
+/**
+ * Resolve the READ tiers for one critical-infrastructure request, in order:
+ * fresh memory, then disk. Returns UPSTREAM when neither can answer. See
+ * resolveMilitaryInstallationTier above for the full rationale.
+ * @param {object} options
+ * @param {string} options.cacheKey
+ * @param {Map<string, {payload: object, cachedAt: number}>} options.memoryCache
+ * @param {Map<string, Promise>} options.inFlight
+ * @param {() => Promise<?{payload: object, cachedAt: number}>} options.readDisk
+ * @param {number} [options.now]
+ * @param {number} [options.cacheMs]
+ * @returns {Promise<{source: 'HIT'|'DISK'|'UPSTREAM', entry: ?object}>}
+ */
+export async function resolveCriticalInfrastructureTier({
+  cacheKey,
+  memoryCache,
+  inFlight,
+  readDisk,
+  now = Date.now(),
+  cacheMs = CRITICAL_INFRASTRUCTURE_CACHE_MS,
+}) {
+  const cached = memoryCache.get(cacheKey);
+  if (cached && now - cached.cachedAt <= cacheMs) return { source: 'HIT', entry: cached };
+  if (inFlight.has(cacheKey)) return { source: 'UPSTREAM', entry: null };
+  const disk = await readDisk();
+  return disk ? { source: 'DISK', entry: disk } : { source: 'UPSTREAM', entry: null };
+}
+
+/**
+ * Bring a stored critical-infrastructure entry up to the current payload
+ * shape. See migrateMilitaryInstallationEntry above for why this derives
+ * `saturated` rather than invalidating pre-fix cache entries.
+ * @param {?{payload: object, cachedAt: number}} entry
+ * @returns {?{payload: object, cachedAt: number}}
+ */
+export function migrateCriticalInfrastructureEntry(entry) {
+  if (!entry?.payload || typeof entry.payload.saturated === 'boolean') return entry;
+  const elements = Array.isArray(entry.payload.elements) ? entry.payload.elements : [];
+  return {
+    ...entry,
+    payload: {
+      ...entry.payload,
+      saturated: elements.length >= CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+    },
+  };
+}
+
+/** Whether a stored critical-infrastructure entry is still inside its TTL. */
+export function criticalInfrastructureDiskFresh(
+  entry,
+  maxAgeMs = CRITICAL_INFRASTRUCTURE_DISK_TTL_MS,
+  now = Date.now(),
+) {
+  if (!entry || !Number.isFinite(entry.cachedAt) || !Array.isArray(entry.payload?.elements)) return false;
+  return now - entry.cachedAt <= maxAgeMs;
+}
+
+/** Cache key -> stable disk-cache file path. */
+export function criticalInfrastructureDiskPath(cacheKey, dir = CRITICAL_INFRASTRUCTURE_DISK_DIR) {
+  return path.join(dir, `${createHash('sha1').update(cacheKey).digest('hex')}.json`);
+}
+
+/**
+ * Read a disk-cached critical-infrastructure entry. maxAgeMs Infinity = any
+ * age (the serve-stale path when Overpass is down).
+ * @returns {Promise<?{payload: object, cachedAt: number}>}
+ */
+export async function readCriticalInfrastructureDisk(
+  cacheKey,
+  maxAgeMs,
+  dir = CRITICAL_INFRASTRUCTURE_DISK_DIR,
+) {
+  try {
+    const entry = JSON.parse(await fsp.readFile(criticalInfrastructureDiskPath(cacheKey, dir), 'utf8'));
+    if (!criticalInfrastructureDiskFresh(entry, maxAgeMs)) return null;
+    return migrateCriticalInfrastructureEntry(entry);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist one critical-infrastructure payload ATOMICALLY: serialize to a
+ * temp sibling, then rename over the target. See writeMilitaryInstallationDisk
+ * above for why an in-place overwrite would be unsafe.
+ * @returns {Promise<boolean>} Whether the entry landed.
+ */
+export async function writeCriticalInfrastructureDisk(
+  cacheKey,
+  entry,
+  dir = CRITICAL_INFRASTRUCTURE_DISK_DIR,
+) {
+  const target = criticalInfrastructureDiskPath(cacheKey, dir);
+  const temp = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(temp, JSON.stringify(entry));
+    await fsp.rename(temp, target);
+    return true;
+  } catch (err) {
+    console.warn('[Critical Infrastructure Proxy] disk cache write failed:', err?.message || err);
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    return false;
+  }
+}
+
+/** Reject boxes spanning the antimeridian or larger than 10 degrees on a side. */
+export function validCriticalInfrastructureBox(params) {
+  const south = requiredFiniteQueryNumber(params, 'south');
+  const west = requiredFiniteQueryNumber(params, 'west');
+  const north = requiredFiniteQueryNumber(params, 'north');
+  const east = requiredFiniteQueryNumber(params, 'east');
+  if (![south, west, north, east].every(Number.isFinite)) return null;
+  if (south < -90 || north > 90 || west < -180 || east > 180 || south >= north || west >= east) return null;
+  if (north - south > 10 || east - west > 10) return null;
+  return { south, west, north, east };
+}
+
+function trimCriticalInfrastructureCache() {
+  while (_criticalInfrastructureCache.size > CRITICAL_INFRASTRUCTURE_MAX_CACHE) {
+    const oldest = _criticalInfrastructureCache.keys().next().value;
+    if (oldest === undefined) break;
+    _criticalInfrastructureCache.delete(oldest);
+  }
+}
+
+function criticalInfrastructureProxy() {
+  async function refresh(box, key) {
+    const bbox = `${box.south},${box.west},${box.north},${box.east}`;
+    const ql = `[out:json][timeout:20];(nwr["power"="plant"](${bbox});nwr["amenity"="hospital"](${bbox}););out center tags geom ${CRITICAL_INFRASTRUCTURE_ELEMENT_CAP};`;
+    const upstream = await fetchOverpassPayload(
+      `data=${encodeURIComponent(ql)}`,
+      CRITICAL_INFRASTRUCTURE_MAX_RESPONSE_BYTES,
+    );
+    if (upstream.status >= 400 || upstream.rateLimited || upstream.runtimeError) {
+      throw new Error('Critical infrastructure upstream unavailable');
+    }
+    const parsed = JSON.parse(upstream.body);
+    const rawElements = Array.isArray(parsed?.elements)
+      ? parsed.elements.slice(0, CRITICAL_INFRASTRUCTURE_ELEMENT_CAP)
+      : [];
+    // Pre-mapped server-side (mapOverpassElement, shared with the client — see
+    // criticalInfrastructureShape.js) so the client only ever places records,
+    // never re-implements the tag/coordinate mapping.
+    const elements = rawElements.map(mapOverpassElement).filter(Boolean);
+    const payload = {
+      elements,
+      // Saturation is judged against the RAW upstream count, not the mapped
+      // one: mapping can only drop elements (missing coordinates), so if it
+      // judged against `elements.length` a response that was truly truncated
+      // upstream could read as complete just because some records got
+      // filtered out along the way.
+      saturated: rawElements.length >= CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+      elementCap: CRITICAL_INFRASTRUCTURE_ELEMENT_CAP,
+      retrievedAt: new Date().toISOString(),
+      status: 'ready',
+    };
+    const entry = { payload, cachedAt: Date.now() };
+    _criticalInfrastructureCache.set(key, entry);
+    trimCriticalInfrastructureCache();
+    writeCriticalInfrastructureDisk(key, entry);
+    return payload;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/critical-infrastructure', async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      if (!_criticalInfrastructureRateLimiter(clientKey(req))) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '5' });
+        res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
+        return;
+      }
+      const url = new URL(req.url, 'http://localhost');
+      const requested = validCriticalInfrastructureBox(url.searchParams);
+      if (!requested) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'A non-dateline bbox no larger than 10 degrees is required' }));
+        return;
+      }
+      // Query the SNAPPED box, not the raw viewport — see the identical
+      // military-installation reasoning above. `exact=1` opts out after a
+      // SATURATED snapped response and is keyed separately.
+      const exact = url.searchParams.get('exact') === '1';
+      const box = exact ? requested : quantizeCriticalInfrastructureBox(requested);
+      const key = exact
+        ? `exact:${criticalInfrastructureCacheKey(box, 5)}`
+        : criticalInfrastructureCacheKey(box);
+      const now = Date.now();
+      const cached = _criticalInfrastructureCache.get(key);
+      const preflight = await resolveCriticalInfrastructureTier({
+        cacheKey: key,
+        memoryCache: _criticalInfrastructureCache,
+        inFlight: _criticalInfrastructureInFlight,
+        readDisk: () => readCriticalInfrastructureDisk(key, CRITICAL_INFRASTRUCTURE_DISK_TTL_MS),
+        now,
+      });
+      if (preflight.source !== 'UPSTREAM') {
+        if (preflight.source === 'DISK') {
+          _criticalInfrastructureCache.set(key, preflight.entry);
+          trimCriticalInfrastructureCache();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60', 'X-Critical-Infrastructure': preflight.source });
+        res.end(JSON.stringify({ ...preflight.entry.payload, status: 'cached' }));
+        return;
+      }
+      const request = coalesceProxyRequest(
+        _criticalInfrastructureInFlight,
+        key,
+        () => refresh(box, key),
+      );
+      try {
+        const payload = await request.promise;
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=60',
+          'X-Critical-Infrastructure': request.shared ? 'INFLIGHT' : 'MISS',
+        });
+        res.end(JSON.stringify(payload));
+      } catch (error) {
+        if (cached && now - cached.cachedAt <= CRITICAL_INFRASTRUCTURE_STALE_MS) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Critical-Infrastructure': 'STALE' });
+          res.end(JSON.stringify({ ...cached.payload, status: 'stale' }));
+          return;
+        }
+        // Overpass is down: last-good mapped context at ANY age beats an
+        // empty layer, the same serve-stale rule the Overpass proxy and the
+        // military-installation proxy both apply.
+        const stale = await readCriticalInfrastructureDisk(key, Infinity);
+        if (stale) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Critical-Infrastructure': 'STALE-DISK' });
+          res.end(JSON.stringify({ ...stale.payload, status: 'stale' }));
+          return;
+        }
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ error: 'Critical infrastructure context is temporarily unavailable' }));
+      }
+    });
+  }
+
+  return {
+    name: 'critical-infrastructure-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Regional cockpit briefing proxy
 // ---------------------------------------------------------------------------
 const REGIONAL_BRIEF_CACHE_MS = 5 * 60_000;
@@ -8339,6 +9524,12 @@ export default defineConfig(({ mode }) => {
       firePerimetersProxy(),
       gdeltEventsProxy(),
       spaceWeatherProxy(),
+      globalHazardsProxy(),
+      volcanoesProxy(),
+      oceanBuoysProxy(),
+      hamRadioProxy(),
+      borderWaitTimesProxy(),
+      fireballsProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),
@@ -8347,6 +9538,7 @@ export default defineConfig(({ mode }) => {
       adsbdbProxy(),
       overpassProxy(),
       militaryInstallationsProxy(),
+      criticalInfrastructureProxy(),
       regionalBriefProxy(),
       weatherEffectsProxy(),
       cctvProxy(),

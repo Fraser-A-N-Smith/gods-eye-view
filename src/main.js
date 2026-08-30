@@ -7,6 +7,12 @@ import militaryFlightsLayer from './data/militaryFlights.js';
 import earthquakesLayer from './data/earthquakes.js';
 import firePerimetersLayer from './data/firePerimeters.js';
 import gdeltEventsLayer from './data/gdeltEvents.js';
+import globalHazardsLayer from './data/globalHazards.js';
+import volcanoesLayer from './data/volcanoes.js';
+import oceanBuoysLayer from './data/oceanBuoys.js';
+import hamRadioPropagationLayer from './data/hamRadioPropagation.js';
+import borderWaitTimesLayer from './data/borderWaitTimes.js';
+import fireballsLayer from './data/fireballs.js';
 import spaceWeatherLayer from './data/spaceWeather.js';
 import weatherAlertsLayer from './data/weatherAlerts.js';
 import tropicalCyclonesLayer from './data/tropicalCyclones.js';
@@ -22,6 +28,7 @@ import bikeshareLayer from './data/bikeshare.js';
 import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
+import criticalInfrastructureLayer from './data/criticalInfrastructure.js';
 import localDataLayers from './data/localLayers.js';
 import { LAYER_STATE_REGISTRY } from './data/layerState.js';
 import { registerDataCredits } from './data/dataCredits.js';
@@ -278,6 +285,12 @@ async function init() {
     dataManager.register(earthquakesLayer);
     dataManager.register(firePerimetersLayer);
     dataManager.register(gdeltEventsLayer);
+    dataManager.register(globalHazardsLayer);
+    dataManager.register(volcanoesLayer);
+    dataManager.register(oceanBuoysLayer);
+    dataManager.register(hamRadioPropagationLayer);
+    dataManager.register(borderWaitTimesLayer);
+    dataManager.register(fireballsLayer);
     dataManager.register(spaceWeatherLayer);
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
@@ -306,6 +319,7 @@ async function init() {
     dataManager.register(militaryInstallationsLayer);
     dataManager.register(militaryAwarenessLayer);
     militaryAwarenessLayer.attachDataManager(dataManager);
+    dataManager.register(criticalInfrastructureLayer);
     for (const layer of localDataLayers) {
       dataManager.register(layer);
     }

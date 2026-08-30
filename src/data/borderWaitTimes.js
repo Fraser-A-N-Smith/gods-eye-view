@@ -1,0 +1,252 @@
+import * as Cesium from 'cesium';
+import { mapWaitTimeEntry, mapWaitTimeEntries } from './borderWaitTimesShape.js';
+
+/**
+ * Border Wait Times — U.S. Customs and Border Protection live crossing wait
+ * times, curated to the ~25 highest-traffic US land border crossings.
+ *
+ * Fetched through the server-side `/api/border-wait-times` proxy, never
+ * directly from bwt.cbp.gov — same reasoning as `spaceWeatherProxy`'s doc
+ * comment in vite.config.js: the proxy is where the raw CBP feed is joined
+ * against the bundled `config/cbp_port_locations.json` lookup once, so the
+ * browser never re-runs that join against the raw feed. The join itself
+ * (`mapWaitTimeEntry`/`mapWaitTimeEntries`) lives in the Cesium-free
+ * `borderWaitTimesShape.js` (mirroring the existing `spaceWeatherShape.js` /
+ * `globalHazardsShape.js` / `volcanoesShape.js` / `oceanBuoysShape.js` /
+ * `hamRadioPropagationShape.js` / `criticalInfrastructureShape.js`
+ * precedent) and is imported directly below — this proxy and the browser
+ * layer run the SAME join implementation, so there is nothing here to fall
+ * out of sync. `borderWaitTimesShape.test.mjs` covers the join contract
+ * once.
+ *
+ * `mapWaitTimeEntry`/`mapWaitTimeEntries` are re-exported here (not merely
+ * imported) so this module's public interface is unchanged from a straight
+ * client-side join: they are pure and Cesium-free, they just happen to live
+ * in `borderWaitTimesShape.js` precisely so `vite.config.js` can import the
+ * SAME implementation the proxy actually runs without dragging this file's
+ * `cesium` import into that Node-only process.
+ *
+ * Each crossing renders as a static colored point + label showing the
+ * passenger-vehicle wait in minutes, static geometry only (no
+ * CallbackProperty, no continuous-render hold) — this is a small fixed set
+ * of ~25 crossings polled on a 5-minute timer, not a per-frame animator.
+ */
+
+const API_URL = '/api/border-wait-times';
+
+export { mapWaitTimeEntry, mapWaitTimeEntries };
+
+/**
+ * Style by passenger-vehicle wait time:
+ *  - Unknown (null): Gray — the crossing has nothing to report, not "no wait".
+ *  - Short (< 20 min): Green
+ *  - Moderate (20-60 min): Yellow
+ *  - Long (>= 60 min): Red
+ */
+function waitStyle(waitMinutes) {
+  if (waitMinutes === null || !Number.isFinite(waitMinutes)) {
+    return { color: Cesium.Color.GRAY, pixelSize: 8 };
+  }
+  if (waitMinutes >= 60) return { color: Cesium.Color.RED, pixelSize: 12 };
+  if (waitMinutes >= 20) return { color: Cesium.Color.YELLOW, pixelSize: 10 };
+  return { color: Cesium.Color.LIME, pixelSize: 8 };
+}
+
+/** Format the wait-minutes label, or a placeholder when unreported/closed. */
+function waitLabel(waitMinutes, status) {
+  if (status && status !== 'Open') return status;
+  return Number.isFinite(waitMinutes) ? `${waitMinutes} min` : 'no report';
+}
+
+/**
+ * Map one crossing's raw plain values (as pulled off an entity's
+ * `properties`, or straight from the proxy payload) to a JSON-safe analyst
+ * record (analyst query engine seam). Pure — no Cesium types. Missing/unknown
+ * fields are null, never NaN/undefined. Falls back to an index-based id when
+ * the upstream port number is absent.
+ * @param {Object|null|undefined} raw - Plain values:
+ *   {id, name, border, lat, lon, waitMinutes, status}.
+ * @param {number} [index=0] - Position in the snapshot (fallback id only).
+ * @returns {{id: string, name: string|null, border: string|null,
+ *   lat: number|null, lon: number|null, waitMinutes: number|null,
+ *   status: string|null}}
+ */
+export function mapAnalystRecord(raw, index = 0) {
+  const num = (v) => (Number.isFinite(v) ? v : null);
+  const text = (v) => { const t = String(v ?? '').trim(); return t || null; };
+  return {
+    id: text(raw?.id) || `CROSSING-${String(index).padStart(4, '0')}`,
+    name: text(raw?.name),
+    border: text(raw?.border),
+    lat: num(raw?.lat),
+    lon: num(raw?.lon),
+    waitMinutes: num(raw?.waitMinutes),
+    status: text(raw?.status),
+  };
+}
+
+export function createBorderWaitTimesLayer() {
+  let _dataSource = null;
+  let _count = 0;
+  let _lastUpdate = null;
+  let _lastError = null;
+
+  const layer = {
+    id: 'border-wait-times',
+    name: 'Border Wait Times (CBP)',
+    icon: '🛂',
+    source: 'U.S. Customs and Border Protection',
+    updateInterval: 300000,
+
+    init(viewer) {
+      _dataSource = new Cesium.CustomDataSource('border-wait-times');
+      _dataSource.show = false;
+      viewer.dataSources.add(_dataSource);
+      _count = 0;
+      _lastUpdate = null;
+      _lastError = null;
+      console.log('[Data:BorderWaitTimes] Initialized');
+    },
+
+    enable(viewer) {
+      if (_dataSource) _dataSource.show = true;
+    },
+
+    disable(viewer) {
+      if (_dataSource) _dataSource.show = false;
+    },
+
+    async update(viewer) {
+      try {
+        const response = await fetch(API_URL);
+        if (!response.ok) {
+          _lastError = `Border Wait Times HTTP ${response.status}`;
+          console.warn(`[Data:BorderWaitTimes] API returned ${response.status}`);
+          return false;
+        }
+
+        const payload = await response.json();
+        if (!payload || !Array.isArray(payload.crossings)) {
+          _lastError = 'Malformed border wait times response';
+          return false;
+        }
+
+        _dataSource.entities.removeAll();
+        let count = 0;
+
+        for (const crossing of payload.crossings) {
+          const lat = Number(crossing?.lat);
+          const lon = Number(crossing?.lon);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+          count++;
+          const waitMinutes = Number.isFinite(crossing.waitMinutes) ? crossing.waitMinutes : null;
+          const status = crossing.status ?? null;
+          const style = waitStyle(waitMinutes);
+          const position = Cesium.Cartesian3.fromDegrees(lon, lat);
+          const stableId = crossing.id || `crossing-${count}`;
+
+          _dataSource.entities.add({
+            id: `border-wait-times:${stableId}`,
+            position,
+            point: {
+              pixelSize: style.pixelSize,
+              color: style.color,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 1,
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: waitLabel(waitMinutes, status),
+              font: '12px sans-serif',
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -12),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            properties: {
+              // Analyst seam (additive): the CBP port_number and crossing name.
+              portNumber: crossing.id ?? null,
+              name: crossing.name ?? null,
+              border: crossing.border ?? null,
+              waitMinutes,
+              status,
+            },
+          });
+        }
+
+        _count = count;
+        _lastUpdate = Date.now();
+        _lastError = null;
+        console.log(`[Data:BorderWaitTimes] Updated: ${_count} crossings`);
+        return true;
+
+      } catch (e) {
+        console.warn('[Data:BorderWaitTimes] Fetch error:', e);
+        _lastError = 'Border wait times network error';
+        return false;
+      }
+    },
+
+    destroy(viewer) {
+      if (_dataSource) {
+        viewer.dataSources.remove(_dataSource, true);
+        _dataSource = null;
+      }
+      _count = 0;
+      _lastUpdate = null;
+      _lastError = null;
+    },
+
+    /**
+     * Snapshot the layer's in-memory crossing records as plain JSON-safe
+     * objects for the analyst query engine. On-demand only (called at most
+     * once per spoken query) — zero per-frame cost, no listeners, no
+     * caching. Returns [] while the layer is disabled or empty.
+     * @param {number} [maxCount=2000] - Maximum records to return (truncation).
+     * @returns {Array<Object>} See mapAnalystRecord for the record shape.
+     */
+    getAnalystRecords(maxCount = 2000) {
+      if (!_dataSource || !_dataSource.show) return [];
+      const entities = _dataSource.entities.values;
+      if (!entities.length) return [];
+      const limit = Number.isFinite(maxCount) ? Math.max(1, Math.floor(maxCount)) : 2000;
+      const now = Cesium.JulianDate.now();
+      const result = [];
+      for (const entity of entities) {
+        if (result.length >= limit) break;
+        const cartesian = entity.position ? entity.position.getValue(now) : null;
+        const carto = cartesian ? Cesium.Cartographic.fromCartesian(cartesian) : null;
+        const p = entity.properties;
+        result.push(mapAnalystRecord({
+          id: p?.portNumber?.getValue(now) ?? null,
+          name: p?.name?.getValue(now),
+          border: p?.border?.getValue(now),
+          waitMinutes: p?.waitMinutes?.getValue(now),
+          status: p?.status?.getValue(now),
+          lat: carto ? Cesium.Math.toDegrees(carto.latitude) : null,
+          lon: carto ? Cesium.Math.toDegrees(carto.longitude) : null,
+        }, result.length));
+      }
+      return result;
+    },
+
+    getStats() {
+      return {
+        count: _count,
+        lastUpdate: _lastUpdate,
+        error: _lastError,
+      };
+    },
+  };
+  return layer;
+}
+
+const borderWaitTimesLayer = createBorderWaitTimesLayer();
+
+export default borderWaitTimesLayer;

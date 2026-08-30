@@ -64,6 +64,13 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
     error: null,
     lastUpdate: null,
     cells: [],
+    // Panel-only enrichments — no globe geometry of their own (NeoWs bodies
+    // have no Earth surface coordinate; DONKI/NOAA-scales are readouts, not
+    // point data). Never undefined: absence is [] / [] / null, same
+    // null-safety discipline as the aurora/Kp fields above.
+    solarEvents: [],
+    closeApproaches: [],
+    radioBlackoutScale: null,
   };
 
   const doFetch = (...args) => (fetchImpl || globalThis.fetch)(...args);
@@ -165,6 +172,13 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
         state.kpAvailable = payload.kpAvailable === true;
         state.observedAt = payload.observedAt || null;
         state.forecastAt = payload.forecastAt || null;
+        state.solarEvents = Array.isArray(payload.solarEvents) ? payload.solarEvents : [];
+        state.closeApproaches = Array.isArray(payload.closeApproaches) ? payload.closeApproaches : [];
+        state.radioBlackoutScale = payload.radioBlackoutScale
+          && typeof payload.radioBlackoutScale === 'object'
+          && !Array.isArray(payload.radioBlackoutScale)
+          ? payload.radioBlackoutScale
+          : null;
         state.lastUpdate = Date.now();
         state.error = null;
         draw();
@@ -193,6 +207,9 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
       state.count = 0;
       state.lastUpdate = null;
       state.error = null;
+      state.solarEvents = [];
+      state.closeApproaches = [];
+      state.radioBlackoutScale = null;
     },
 
     getStats() {
@@ -204,6 +221,12 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
         kp: state.kp,
         coverage: 'GLOBAL · OVATION FORECAST',
         status: spaceWeatherStatusText(state),
+        // Panel enrichments — never undefined, same discipline as the fields
+        // above (see the `state` initializer for why: NeoWs bodies have no
+        // Earth surface coordinate, so this is their only presentation).
+        solarEvents: state.solarEvents,
+        closeApproaches: state.closeApproaches,
+        radioBlackoutScale: state.radioBlackoutScale,
       };
     },
   };

@@ -21,7 +21,7 @@
  * the layer is required to say so.
  */
 
-import { finiteOrNull } from './numeric.js';
+import { finiteOrNull, textOrNull } from './numeric.js';
 
 /** Kp bands, with what each actually means for the other layers. */
 export const KP_BANDS = Object.freeze([
@@ -125,6 +125,197 @@ export function parsePlanetaryKp(payload) {
     return { kp, timeTag: timeIndex >= 0 ? String(row[timeIndex] ?? '') || null : null };
   }
   return { kp: null, timeTag: null };
+}
+
+/**
+ * Pull a panel-sized summary out of a DONKI message body.
+ *
+ * `messageBody` is long free text intended for an email digest, often several
+ * paragraphs with a `## Summary:` heading. The panel gets one sentence, not
+ * the digest: the paragraph under that heading if present, else the first
+ * ~200 characters.
+ *
+ * @param {*} body Raw `messageBody` field.
+ * @returns {string}
+ */
+function extractDonkiSummary(body) {
+  const text = textOrNull(body);
+  if (!text) return '';
+  const heading = /##\s*Summary:?/i.exec(text);
+  if (heading) {
+    // Real DONKI bodies put a blank line between the heading and its
+    // paragraph ("## Summary:\n\nC-type CME detected..."); without stripping
+    // that leading blank line first, the paragraph-end search matches it
+    // immediately and returns an empty string.
+    const rest = text.slice(heading.index + heading[0].length).replace(/^\s+/, '');
+    const paragraphEnd = rest.search(/\n\s*\n|\n##/);
+    const paragraph = (paragraphEnd >= 0 ? rest.slice(0, paragraphEnd) : rest).trim();
+    if (paragraph) return paragraph.slice(0, 200);
+  }
+  return text.slice(0, 200).trim();
+}
+
+/**
+ * Parse DONKI (Database Of Notifications, Knowledge, Information) CME/flare
+ * notifications into panel-sized events.
+ *
+ * @param {*} payload Parsed DONKI `/DONKI/notifications` response.
+ * @param {object} [options]
+ * @param {number} [options.maxItems] Cap on returned events.
+ * @returns {Array<{id:string, type:string, issuedMs:number, summary:string, url:string|null}>}
+ */
+export function parseDonkiNotifications(payload, { maxItems = 20 } = {}) {
+  const raw = Array.isArray(payload) ? payload : [];
+  const events = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const type = textOrNull(entry.messageType);
+    const id = textOrNull(entry.messageID);
+    const issuedMs = typeof entry.messageIssueTime === 'string' ? Date.parse(entry.messageIssueTime) : NaN;
+    if (!type || !id || !Number.isFinite(issuedMs)) continue;
+    events.push({
+      id,
+      type,
+      issuedMs,
+      summary: extractDonkiSummary(entry.messageBody),
+      url: textOrNull(entry.messageURL),
+    });
+  }
+  // Newest first — a week of notifications is a scroll, not a feed to read
+  // bottom-up.
+  events.sort((a, b) => b.issuedMs - a.issuedMs);
+  return events.slice(0, maxItems);
+}
+
+/**
+ * Parse a single-day NeoWs feed into close-approach records.
+ *
+ * The feed is keyed by date; a single-day query still nests one array under
+ * that date's key, so this flattens across whatever keys are present rather
+ * than assuming today's date string matches exactly (timezone skew between
+ * client and upstream can otherwise produce an empty grab of the right day).
+ * Each object carries exactly one `close_approach_data` entry for a
+ * single-day query, so the first is the relevant one. These bodies have no
+ * Earth surface coordinate — there is nowhere on the globe to place them —
+ * which is why they live in this panel rather than as map entities.
+ *
+ * @param {*} payload Parsed NeoWs `/neo/rest/v1/feed` response.
+ * @param {object} [options]
+ * @param {number} [options.maxItems] Cap on returned approaches.
+ * @returns {Array<{id:string, name:string, missDistanceKm:number, velocityKmS:number|null, diameterMinM:number|null, diameterMaxM:number|null, hazardous:boolean, closeApproachMs:number|null}>}
+ */
+export function parseNeoFeed(payload, { maxItems = 20 } = {}) {
+  const byDate = payload?.near_earth_objects;
+  const objects = [];
+  if (byDate && typeof byDate === 'object') {
+    for (const list of Object.values(byDate)) {
+      if (Array.isArray(list)) objects.push(...list);
+    }
+  }
+
+  const approaches = [];
+  for (const obj of objects) {
+    if (!obj || typeof obj !== 'object') continue;
+    const id = textOrNull(obj.id);
+    if (!id) continue;
+    const approach = Array.isArray(obj.close_approach_data) ? obj.close_approach_data[0] : null;
+    const missDistanceKm = finiteOrNull(approach?.miss_distance?.kilometers);
+    if (missDistanceKm === null) continue;
+    approaches.push({
+      id,
+      name: textOrNull(obj.name) || id,
+      missDistanceKm,
+      velocityKmS: finiteOrNull(approach?.relative_velocity?.kilometers_per_second),
+      diameterMinM: finiteOrNull(obj?.estimated_diameter?.meters?.estimated_diameter_min),
+      diameterMaxM: finiteOrNull(obj?.estimated_diameter?.meters?.estimated_diameter_max),
+      hazardous: obj.is_potentially_hazardous_asteroid === true,
+      closeApproachMs: finiteOrNull(approach?.epoch_date_close_approach),
+    });
+  }
+
+  // Closest first — the interesting ones, and what a "close approach" panel
+  // implies by name.
+  approaches.sort((a, b) => a.missDistanceKm - b.missDistanceKm);
+  return approaches.slice(0, maxItems);
+}
+
+/**
+ * Parse today's NOAA radio-blackout (R) scale out of the `noaa-scales.json`
+ * product, which reports today plus a 3-day forecast keyed `"0"`..`"3"`.
+ *
+ * @param {*} payload Parsed `noaa-scales.json` response.
+ * @returns {{scale:string|null, text:string|null}|null} `null` only when
+ *   today's `R` entry itself is missing — an entry with a null Scale (no
+ *   current blackout) is still a real reading, not an absent one.
+ */
+export function parseRadioBlackoutScale(payload) {
+  const today = payload && typeof payload === 'object' ? payload['0'] : null;
+  const r = today && typeof today === 'object' ? today.R : null;
+  if (!r || typeof r !== 'object') return null;
+  return { scale: textOrNull(r.Scale), text: textOrNull(r.Text) };
+}
+
+/**
+ * Merge the five `Promise.allSettled` results from `spaceWeatherProxy`'s
+ * upstream fan-out (aurora, Kp, DONKI, NeoWs, NOAA scales) into the payload
+ * the client layer consumes.
+ *
+ * Pulled out of `vite.config.js` so the per-source independent-failure
+ * guarantee — a DONKI/NeoWs/NOAA-scales rejection blanks only its own field
+ * and never touches the aurora oval or Kp index, and (the reverse) a
+ * rejection of any of the four optional sources never blanks any of the
+ * others — is a plain, directly unit-testable function rather than
+ * something only verifiable by reading the proxy's closure. If that merge
+ * step is ever refactored and accidentally lets one rejection blank another
+ * source's data, a test here catches it; nothing else in this codebase
+ * exercises a `refreshUpstream` merge step this way, which is exactly why
+ * this one is worth pulling out.
+ *
+ * The aurora result is the sole exception to "independent": it is required,
+ * so a rejected `auroraResult` re-throws its rejection reason here rather
+ * than degrading — the proxy has nothing worth serving without it, and the
+ * caller (`spaceWeatherProxy.refreshUpstream`) is expected to let that throw
+ * propagate into its existing stale-cache/502 handling unchanged.
+ *
+ * @param {object} results
+ * @param {PromiseSettledResult<*>} results.auroraResult
+ * @param {PromiseSettledResult<*>} results.kpResult
+ * @param {PromiseSettledResult<*>} results.donkiResult
+ * @param {PromiseSettledResult<*>} results.neoResult
+ * @param {PromiseSettledResult<*>} results.scalesResult
+ * @returns {object} The merged payload (pre-`JSON.stringify`; the proxy adds
+ *   `attribution`/`fetchedAt` on top).
+ * @throws {*} `auroraResult.reason` when the aurora fetch itself failed.
+ */
+export function mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult }) {
+  if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
+  const aurora = parseAuroraGrid(auroraResult.value);
+  const kp = kpResult.status === 'fulfilled'
+    ? parsePlanetaryKp(kpResult.value)
+    : { kp: null, timeTag: null };
+  const solarEvents = donkiResult.status === 'fulfilled'
+    ? parseDonkiNotifications(donkiResult.value)
+    : [];
+  const closeApproaches = neoResult.status === 'fulfilled'
+    ? parseNeoFeed(neoResult.value)
+    : [];
+  const radioBlackoutScale = scalesResult.status === 'fulfilled'
+    ? parseRadioBlackoutScale(scalesResult.value)
+    : null;
+
+  return {
+    aurora: aurora.points,
+    auroraPeak: aurora.peak,
+    observedAt: aurora.observedAt,
+    forecastAt: aurora.forecastAt,
+    gridDropped: aurora.dropped,
+    kp: kp.kp,
+    kpTimeTag: kp.timeTag,
+    kpAvailable: kpResult.status === 'fulfilled',
+    solarEvents,
+    closeApproaches,
+    radioBlackoutScale,
+  };
 }
 
 /**
