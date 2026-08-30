@@ -259,7 +259,11 @@ test('an explicit env client id is not overwritten by the credentials file', () 
 test('WINDOWS PATHS: root resolution goes through fileURLToPath, not URL.pathname', () => {
   // `new URL(...).pathname` yields "/C:/Users/..." on Windows — a leading-slash
   // path that every later path.join builds on and no fs call can open.
-  const root = repoRootFrom('file:///home/user/project/scripts/lib/secrets.mjs', 2);
+  // `{ windows: false }` forces POSIX URL parsing for this literal regardless
+  // of the host OS running the suite: fileURLToPath() otherwise follows
+  // process.platform, and a POSIX-shaped file:// URL has no drive letter for
+  // its Windows parser to find, which throws ERR_INVALID_FILE_URL_PATH.
+  const root = repoRootFrom('file:///home/user/project/scripts/lib/secrets.mjs', 2, { windows: false });
   assert.equal(root, path.resolve('/home/user/project'));
   assert.doesNotMatch(root, /^\/[A-Za-z]:/, 'a drive-letter path must never keep a leading slash');
 });
@@ -269,6 +273,12 @@ test('REPO_ROOT is a constant, so it cannot be resolved from the wrong depth', (
   // in scripts/lib/. Called from scripts/ it landed one directory ABOVE the
   // repository, and the credential importer wrote a .env outside the project.
   assert.equal(path.basename(REPO_ROOT), 'gods-eye-view');
-  assert.equal(repoRootFrom('file:///a/b/c/scripts/tool.mjs', 1), path.resolve('/a/b/c'));
-  assert.equal(repoRootFrom('file:///a/b/c/scripts/lib/tool.mjs', 2), path.resolve('/a/b/c'));
+  assert.equal(
+    repoRootFrom('file:///a/b/c/scripts/tool.mjs', 1, { windows: false }),
+    path.resolve('/a/b/c'),
+  );
+  assert.equal(
+    repoRootFrom('file:///a/b/c/scripts/lib/tool.mjs', 2, { windows: false }),
+    path.resolve('/a/b/c'),
+  );
 });

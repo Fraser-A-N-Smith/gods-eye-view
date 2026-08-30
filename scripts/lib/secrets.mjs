@@ -307,9 +307,13 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
  * Repository root for a module at a known depth below it.
  * @param {string} moduleUrl An `import.meta.url`.
  * @param {number} [levelsUp] Directories between that module and the root.
+ * @param {{windows?: boolean}} [options] Forces POSIX or Windows URL parsing
+ *   instead of following the host OS — for tests exercising one platform's
+ *   path shape from another. Real callers never pass this: production always
+ *   wants the host OS's own interpretation of its own `import.meta.url`.
  * @returns {string} Absolute path.
  */
-export function repoRootFrom(moduleUrl, levelsUp = 2) {
+export function repoRootFrom(moduleUrl, levelsUp = 2, options) {
   const segments = Array.from({ length: levelsUp }, () => '..');
-  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), ...segments);
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl, options)), ...segments);
 }
