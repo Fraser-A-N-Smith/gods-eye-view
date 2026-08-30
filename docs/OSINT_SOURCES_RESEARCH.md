@@ -2,25 +2,34 @@
 
 Research pass over public/OSINT data sources **not yet integrated** into God's Eye
 View, scoped against the project's actual constraints (see [`CONTRIBUTING.md`](../CONTRIBUTING.md)
-and the [Responsible & Open](../README.md#-responsible--open) section of the README):
+and the [Responsible & Open](../README.md#-responsible--open) section of the README) plus one
+hard filter applied throughout this pass:
 
+- **Must be usable at no monetary cost.** Every candidate below has a real, working free
+  access path — a keyless endpoint, a free-to-register API key, or a free account with no paid
+  tier gating the actual data needed. Sources that are free *in theory* but gate the useful data
+  behind a corporate/enterprise license, require operating physical hardware to earn API access,
+  or have no working API at any price are filtered out — see [Removed from consideration](#removed-from-consideration--not-free-or-not-workable).
 - **Public data only**, fetched live where its terms don't allow redistribution — never scraped
-  against a source's ToS, never private/paywalled.
-- **Events, assets, infrastructure, and systems** — not named-person search, face recognition,
-  or tracking individuals. A candidate that can only add value by identifying people is out of
-  scope regardless of how "open" the data is.
+  against a source's ToS, never private/paywalled. A source that's free but restricted to
+  **non-commercial** use (the same pattern the app already ships for OpenSky and Global Fishing
+  Watch) is kept and flagged, not filtered — free-with-NC-restriction is a known, precedented
+  shape in this project, not a "non-match."
+- **Events, assets, infrastructure, and systems** — not named-person search, face recognition, or
+  tracking individuals. A candidate that can only add value by identifying people is out of scope
+  regardless of how open or free the data is.
 - Each layer is a self-contained module (`src/data/<layer>.js`) with server-side proxying for
   anything needing a key (see [`SECURITY.md`](../SECURITY.md)) — so feasibility below calls out
-  where that's cheap (GET + cache) vs. where it needs real plumbing (auth flows, rate budgets,
-  polygon/track resolution).
+  where that's cheap (GET + cache) vs. where it needs real plumbing (auth flows, non-REST
+  protocols, rate budgets, per-event ingestion).
 
 This is a research document, not an implementation — it's meant to seed future "add a data
 layer" issues/PRs per `CONTRIBUTING.md`. Existing sources (see [`DATA_SOURCES.md`](../DATA_SOURCES.md))
 are not repeated here except where a candidate is a variant/superset worth comparing against one
 already in use.
 
-For each candidate: **what it adds**, **license/cost**, **auth**, **feasibility**, and a
-recommendation. 🟢 keyless/free · 🟡 free key/account · 🔴 paid or restrictive · ⛔ not recommended.
+🟢 keyless, no signup · 🟡 free key/account required, no paid tier for the needed data ·
+🟠 free but non-REST or operationally involved · ⚠️ free with a non-commercial restriction
 
 ---
 
@@ -28,11 +37,8 @@ recommendation. 🟢 keyless/free · 🟡 free key/account · 🔴 paid or restr
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **GPSJam.org** (uses OpenSky-derived ADS-B data) | Daily GPS jamming/spoofing heatmap, aggregated from aircraft GNSS-vs-ADS-B position deltas — a real "invisible layer" (electronic warfare/jamming zones near conflict areas) that nothing else here surfaces | Data + code CC-licensed by the maintainer (Michal Kučera); daily static GeoJSON tiles, not a live query API | 🟢 | Best fit as a **toggleable overlay**, not a polling layer — tiles refresh once/day. Directly complements the existing Flights and Space Weather layers (GNSS degradation is already discussed there for satellites). **High value, low integration cost.** |
-| **FAA NOTAMs / TFRs** (`notams.aim.faa.gov`, or aviationweather.gov) | Temporary flight restrictions — VIP movement, wildfire TFRs, stadium TFRs, launch/reentry windows | US public domain | 🟢 (external API access is inconsistently documented/rate-limited; may require FAA System Wide Information Management (SWIM) registration for the reliable feed) | Good complement to Space Missions (launch TFRs) and Fire layers (wildfire TFRs). **US-only** coverage is the main limitation — flag it the same way CBP Border Wait Times is flagged as a curated US subset. |
-| **AVWX / aviationweather.gov METAR-TAF** | Airport-level weather (ceiling, visibility, winds) at any tracked airport | US public domain (NWS-derived) | 🟢 | Narrower version of what Open-Meteo already provides for the cockpit Local Info page — only worth adding if surfaced specifically for **destination airport** context during Final Approach missions, not as a new top-level layer. |
-
-**Recommendation:** GPSJam is the standout — it's a genuinely new *kind* of signal (denial/deception, not just position telemetry) with a trivial integration shape (daily static tiles, no key).
+| **GPSJam.org** | Daily GPS jamming/spoofing heatmap, aggregated from ADS-B Exchange aircraft GNSS-vs-reported-position deltas — a real "invisible layer" (electronic warfare/denial zones near conflict areas) nothing else here surfaces | Underlying H3-resolution-4 dataset (John Wiseman) is **CC-BY**, fully free, no NC restriction | 🟢 | Daily static tiles, not a polling API — cheapest possible integration shape. Complements Live Flights and the existing Space Weather (GNSS-degradation) framing. **Top pick.** |
+| **FAA NOTAMs / TFRs** (aviationweather.gov / FAA External NOTAM System) | Temporary flight restrictions — VIP movement, wildfire TFRs, stadium TFRs, launch/reentry windows | US public domain | 🟠 | Free, but the reliable machine-readable feed traditionally sits behind FAA SWIM subscriber registration; aviationweather.gov's public NOTAM search is free and keyless but less complete/aviation-grade. Worth a spike to confirm current coverage before committing to a layer. |
 
 ---
 
@@ -40,93 +46,83 @@ recommendation. 🟢 keyless/free · 🟡 free key/account · 🔴 paid or restr
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **AISHub** | Community-shared AIS feed — an alternate/redundant vessel source alongside AISStream, with different regional coverage strength (stronger in parts of Europe/Asia) | Free for members who also share a receiver feed; otherwise limited | 🟡 (requires becoming a data-sharing member — not just an API key) | Reciprocity requirement (you must contribute AIS data to get data back) makes this a poor fit for a client-side open-source app with no fixed receiver — **not practical** the way AISStream's simple key model is. |
-| **IMB Piracy Reporting Centre** (ICC Commercial Crime Services) | Live piracy/armed-robbery-at-sea incident reports — an actual maritime-security event layer, distinct from AIS "gaps" already covered by Global Fishing Watch | Public incident map; no documented open API (currently HTML/PDF-report driven) | 🔴 (no stable API to build a live proxy against) | Valuable content, weak plumbing. Worth revisiting if ICC ever exposes a structured feed; for now would require scraping an HTML incident map, which conflicts with the "don't scrape against a source's terms/without a clean API" bar. **Defer.** |
-| **NOAA CO-OPS Tides & Currents API** | Real-time water level, tide predictions, and current speed at US ports/harbors | US public domain | 🟢 | Nice complement to the existing NOAA National Data Buoy Center layer (which does open-ocean wind/wave, not tidal/harbor). Same integration shape as buoys — small, well-documented REST API. |
-
-**Recommendation:** NOAA CO-OPS is the practical near-term add; AISHub and IMB Piracy are good ideas blocked by access-model/plumbing problems, not by fit.
+| **NOAA CO-OPS Tides & Currents API** | Real-time water level, tide predictions, and current speed at US ports/harbors | US public domain | 🟢 | Complements the existing NOAA National Data Buoy Center layer (open-ocean wind/wave vs. harbor tidal state). Same small, well-documented REST shape as the buoy layer already shipped. |
 
 ---
 
-## Space
+## Space & atmosphere
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **SondeHub** | Live weather-balloon (radiosonde) tracking, including amateur high-altitude balloon flights — genuinely new object class, mid-atmosphere rather than orbital or surface | Free/open project data (Habhub/SondeHub community); API documented and public | 🟢 | Sits nicely between the Flights layer (surface-adjacent) and the Satellites layer (orbital) — a "stratosphere" tier. Positions update every ~minute during active ascents; sparse but real when there's a flight up. **Good, cheap, novel.** |
-| **Space-Track.org** | Higher-fidelity TLEs and (with an account) conjunction data messages (CDMs) — actual collision-warning data, a step beyond CelesTrak's public catalog | US government (18th SDS); free registered access, ToS restricts redistribution | 🟡 (free account + login-session auth, more involved than a static API key) | Would upgrade satellite-conjunction storytelling ("these two objects are about to pass close"), but CelesTrak already covers the propagation use case well; CDMs are the actually-new part and require careful server-side session handling. **Medium priority, non-trivial auth.** |
-
-**Recommendation:** SondeHub is a quick, novel add. Space-Track is worth a follow-up investigation specifically for CDMs, not as a TLE replacement.
+| **SondeHub** | Live weather-balloon (radiosonde) tracking, including amateur high-altitude balloon flights — a genuinely new object class between the Flights layer (surface) and Satellites layer (orbital) | CC BY-SA 2.0, free and open (funded by an Amateur Radio Digital Communications grant + donations, not required to use it) | 🟢 | Real-time streaming API documented and public; rate-limited (poll the state snapshot, then stream). **Cheap, novel, good fit.** |
+| **Space-Track.org** | Higher-fidelity TLEs and Conjunction Data Messages (CDMs) — actual collision-warning data, a step beyond CelesTrak's public catalog | US government (18th Space Control Squadron); **fully free**, no paid tier at any level | 🟡 (free registered account + data-use agreement, session-based auth rather than a static key) | Confirmed genuinely free — the only cost is a more involved login flow (30 req/min, 300/hr limits) than a plain API key. CDMs are the actually-new payload; CelesTrak already covers plain propagation well. **Worth a follow-up spike specifically for CDMs.** |
 
 ---
 
-## Ground infrastructure & connectivity
+## Environment, weather & disaster
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **IODA** (Internet Outage Detection and Analysis, Georgia Tech) | Live internet-outage signal by country/region (BGP, active probing, darknet traffic) — a genuinely new "is the internet up here" layer that fits the infrastructure theme (submarine cables, datacenters) already in the app | Free, public API, academic project | 🟢 | Strong conceptual fit next to the existing Submarine Cables and Datacenters bundled layers — "the physical backbone" + "is it working" as a pair. Country/region-level granularity (not point features), so it'd render as a choropleth-style overlay rather than markers — different rendering pattern than most current layers. |
-| **Cloudflare Radar API** | Internet traffic anomalies, outage detection, and BGP hijack/leak alerts at a global vantage point | Free tier with generous limits; ToS permits non-commercial dashboards | 🟡 | Overlaps IODA's outage-detection niche with a different (and arguably more actively maintained) data source and a real REST API + API-key model that's easy to proxy server-side. **Prefer this over IODA for initial integration** on API ergonomics alone. |
-| **NetBlocks** | Human-readable internet shutdown/censorship incident reports, often tied to specific political events | Reports published via site/Twitter; no public structured API | 🔴 | Good narrative value, no stable machine-readable feed — same problem as IMB Piracy. **Defer** until/unless a structured feed appears. |
-| **OpenCelliD** | Crowd-sourced cell tower location database | CC BY-SA 4.0 (data), free API with a signup-gated key | 🟡 | Fits the "visible infrastructure" theme (alongside Datacenters/Dams), but the value-add over existing infrastructure layers is unclear, and cell-site density in some regions is thin enough to read as noise rather than signal. **Low priority.** |
-| **PowerOutage.us** | Live US utility outage counts by county | Aggregated from utility company data; commercial licensing required for API access beyond a very limited free tier | 🔴 | The interesting global disaster-correlation story (fires/storms → power loss) is blocked by the paid tier. **Not recommended** unless a deployer wants to bring their own paid key, similar to the existing TomTom/GFW BYOK pattern. |
-
-**Recommendation:** Cloudflare Radar is the best next infrastructure layer — real API, free tier, and a novel "is the internet up" signal with no existing analog in the app.
+| **Open-Meteo Air Quality API** | Real-time + forecast air quality (US AQI, PM2.5, PM10, NO₂, O₃, CO) from Copernicus CAMS, at any point on the globe | Same CC BY 4.0 licence as the Open-Meteo weather endpoint the app **already uses**; free for non-commercial use, 10,000 calls/day with no key | 🟢 ⚠️ | **The best single find of this pass.** This is a second endpoint (`air-quality-api.open-meteo.com`) from the exact provider already integrated for cockpit weather — same licence, same keyless pattern, same attribution line. Pairs naturally with Active Fires/FIRMS and NASA EONET's smoke/haze detections ("what's the air quality downwind of this fire"). Commercial deployments need Open-Meteo's paid tier, same as the existing weather integration already implies. |
+| **Open-Meteo Flood API** | Ensemble river-discharge forecasts (up to 30 days) from the Copernicus Global Flood Awareness System (GloFAS) — a genuinely new hazard type (riverine flood forecasting) distinct from GDACS's binary flood/drought alerts | CC BY 4.0, free for non-commercial use, same provider/terms as above | 🟢 ⚠️ | Reaching GloFAS forecast data usually means requesting raw netCDF from Copernicus's FTP service — Open-Meteo already wraps it as clean JSON. Same integration shape and provider as the Air Quality API above; both could ship in the same PR. |
+| **Global Wildfire Information System (GWIS/EFFIS)** | Near-real-time **global** fire danger forecast, lightning-ignition risk, and burnt-area perimeters — the existing NIFC Fire Perimeters layer is **US-only**; GWIS is the worldwide equivalent | Copernicus Emergency Management Service data policy — free and open, same family as the Sentinel-1/2 imagery already proxied | 🟢 | Fills a real, named gap: fire perimeters exist today only for the US. Country-profile API is documented and public. |
+| **Global Forest Watch (GLAD/RADD deforestation alerts)** | Weekly (GLAD, 30 m) and near-real-time (RADD, 10 m tropics) tree-cover-loss alerts — a slow-motion "event" layer distinct from anything currently on the globe | World Resources Institute + NASA/UMD; open REST/GeoJSON Data API, used commercially today by supply-chain auditors and governments — no NC restriction found | 🟢 | New category entirely: human-driven land-use change as a live layer, sitting well next to Datacenters/Dams as "infrastructure and its footprint." |
+| **EMSC (European-Mediterranean Seismological Centre)** | Faster preliminary earthquake detections for Europe/Mediterranean than USGS, via the standard FDSN event web service (SeismicPortal) | Free NGO public-safety service, no commercial restriction found | 🟢 | Complements USGS rather than replacing it — regional speed/density advantage in exactly the region USGS covers thinnest. |
+| **WHO Disease Outbreak News** | Structured, geocoded public-health outbreak events (new epidemics, not ongoing case-count dashboards) | WHO public data; official JSON API plus a plain RSS feed, both free, no key | 🟢 | A genuinely new event category — the app currently has no health/epidemiological layer at all. Fits the "Global Reporting" mold (event, not person) cleanly. |
+| **USGS Volcano Notification / Message API** | Real-time US volcano status-change messages (alert-level changes, ash advisories) from the five US Volcano Observatories | US public domain | 🟢 | Complements the existing Smithsonian Global Volcanism Program layer (eruption history/points) with live US status changes — narrower scope (US-only) but genuinely real-time where GVP is more of a catalog. |
 
 ---
 
-## Disaster, environment & humanitarian
+## Internet & infrastructure health
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **ReliefWeb API** (UN OCHA) | Structured, geocoded humanitarian disaster reports and situation updates — a curated, higher-signal alternative/complement to the GDELT-driven Global Reporting layer for disaster-specific content | Public, free, documented REST API; UN open data terms | 🟢 | Strong complement to GDACS/NASA EONET (which are automated hazard *detections*) — ReliefWeb adds the human/response-side reporting layer. Straightforward REST integration, same shape as GDACS. |
-| **OpenAQ** | Real-time global air-quality measurements (PM2.5, ozone, etc.) from thousands of government and community monitors | Public domain / CC0-adjacent aggregation of government data; free API | 🟢 | Natural pairing with Active Fires and NASA EONET's smoke/haze detections — "what's the air quality downwind of this fire" is a compelling, easy-to-explain mission. Well-documented API, no key required for basic use (a free key raises limits). **High value, low friction.** |
-| **Copernicus Emergency Management Service — Rapid Mapping** | On-demand satellite-derived disaster impact maps (flood extents, burn scars, damage assessments) activated for major events | Free and open (Copernicus data policy, same family already used for Sentinel imagery) | 🟢 (some products; full activation list via their portal, not a clean polling API) | Conceptually a great fit (the project already proxies Copernicus Sentinel-1/2), but Rapid Mapping products are per-activation GIS layers (shapefiles/WMS per event) rather than a stable polling endpoint — more like the CCTV "city pack" integration shape (bespoke per event) than a always-on layer. **Interesting, but needs a per-event ingestion design, not a simple proxy.** |
-| **VAAC (Volcanic Ash Advisory Centers)** via aviationweather.gov | Volcanic ash cloud advisories — aviation-hazard airspace polygons, complementing the existing Smithsonian Global Volcanism Program eruption points | US/international public data (9 VAACs worldwide; the US ones are on aviationweather.gov) | 🟢 | Good pairing with the existing Volcanoes layer — eruption point → ash cloud polygon → affected airspace ties directly into the Flights layer story. |
-
-**Recommendation:** OpenAQ and ReliefWeb are both straightforward, high-value, low-friction adds. Copernicus Rapid Mapping is worth a dedicated follow-up given its different (per-event) integration shape.
+| **Cloudflare Radar API** | Internet traffic anomalies, outage detection, and BGP hijack/leak alerts at global vantage — an "is the internet up here" signal that pairs with the existing Submarine Cables/Datacenters infrastructure layers | Free API; data under **CC BY-NC 4.0** | 🟡 ⚠️ | Real REST API + simple token auth, easy to proxy server-side. NC-flagged the same way the app already flags OpenSky/GFW/TeleGeography — free to run, not for commercial redistribution of the raw data. |
+| **IODA** (Internet Outage Detection & Analysis, Georgia Tech/CAIDA) | Country/ASN-level internet outage signal from BGP, active probing, and darknet traffic | Free public-good academic project (Georgia Tech Internet Intelligence Research Lab) | 🟢 | Overlaps Cloudflare Radar's outage-detection niche from an independent methodology; formal API docs are thinner than Radar's, so Radar is the safer first integration with IODA as a secondary/cross-check source later. |
 
 ---
 
-## Conflict & human security
+## Amateur radio & open spectrum
 
 | Source | What it adds | License / cost | Auth | Notes |
 |---|---|---|---|---|
-| **ACLED** (Armed Conflict Location & Event Data Project) | Structured, geocoded conflict-event data (battles, violence against civilians, protests, riots) with actor/fatality metadata — much higher-fidelity than GDELT's theme-tagged news mentions for this specific use case | Free for registered academic/non-profit/some students; **commercial and general public use requires a paid license** | 🔴 (registration-gated, and general-purpose open-source redistribution likely falls outside the free tier) | The project's GDELT-based Global Reporting layer already covers "protests/conflict, geocoded from news" at a fully open license. ACLED's stricter terms make it a poor default; note it as a **BYOK-style optional layer** (like Global Fishing Watch / TomTom) rather than default-on, and only if a deployer's use case clears ACLED's licensing. |
-| **OpenSanctions** | Consolidated global sanctions/PEP/watchlist data — entities and *vessels* (many sanctioned ships have known IMO numbers and last-known positions) | Data under a mix of open licenses per source, aggregation is free for non-commercial use with a paid tier for commercial/API-heavy use | 🟡 | The vessel angle is the actual fit here: cross-referencing AIS/vessel-events data against sanctioned-vessel lists is squarely in the "assets and systems, not people" lane the README draws. Entity/person-level sanctions data should stay out of scope per the no-named-person-tracking line; a vessel-only subset is worth scoping carefully. **Interesting but needs careful scoping to stay on the right side of the project's own ethics line.** |
-
-**Recommendation:** Treat both as optional/BYOK, gated behind explicit scoping work — ACLED for licensing reasons, OpenSanctions to keep strictly to the vessel/asset subset and away from person-level data.
+| **APRS-IS** | Live positions from the Automatic Packet Reporting System — trackers, weather stations, and high-altitude balloons reporting position over ham radio, worldwide, real time | Amateur-radio public service band; free, open protocol | 🟠 | Genuinely free but **not a REST API** — it's a plain-text protocol over a raw TCP socket (`rotate.aprs2.net:14580`), using a callsign + numeric "passcode" for a read-only login (no transmit license needed to just receive). Needs a small persistent TCP client server-side, a different shape than every other layer in the app. Pairs naturally with SondeHub for balloon flights and complements PSKReporter's propagation *spots* with actual moving *positions*. |
+| **WSPRnet / WSPR.live** | Weak Signal Propagation Reporter spots — another live propagation dataset alongside the existing PSKReporter layer, with an independent contributor network | wspr.live: free for research/non-commercial use, public results only; official WSPRnet API access is available on request from the site maintainer | 🟢 ⚠️ | wspr.live gives a queryable free database today (ClickHouse-backed, documented); direct WSPRnet API access requires reaching out to the maintainer. Largely redundant with PSKReporter's existing niche — worth adding only if wspr.live's independent station network materially improves coverage in practice. |
 
 ---
 
-## Amateur radio & spectrum
+## Considered and rejected as a novel find, but noted for completeness
 
-| Source | What it adds | License / cost | Auth | Notes |
-|---|---|---|---|---|
-| **APRS-IS** | Live positions from the Automatic Packet Reporting System — ham radio operators, weather stations, and (notably) high-altitude balloon trackers reporting position over RF, worldwide, in real time | Amateur radio is a public service band; APRS-IS access is free but governed by amateur-radio community usage norms (no commercial redistribution of live feeds) | 🟢 (a "verified" or callsign-style login is customary but low-friction) | Directly complements the existing PSKReporter layer (propagation *spots*, not positions) — APRS gives actual moving *positions* of trackers/vehicles/balloons, a genuinely different signal type. Natural pairing with the new SondeHub candidate above for balloon flights. **Good fit, similar integration shape to PSKReporter.** |
-| **SatNOGS** | Crowd-sourced satellite ground-station network — observation schedules and telemetry decodes for amateur/cubesat satellites | Open (AGPL-licensed project, CC-BY data) | 🟢 | Niche audience overlap with the existing Satellites layer, but the practical payload (telemetry decode status, not positions — CelesTrak already handles position) is thin value for a global 3D-globe context. **Low priority.** |
-
-**Recommendation:** APRS-IS is a strong, cheap addition alongside PSKReporter and SondeHub — together they'd give the Radio/Space corner of the app a coherent "everything broadcasting position or telemetry over open spectrum" story.
+| Source | Why it's an edge case, not a clean addition |
+|---|---|
+| **Movebank** (wildlife movement tracking) | Genuinely free and open for many studies (Max Planck Institute/NC Museum of Natural Sciences), but access is **per-study**: some datasets need no login, others require a free account *and* accepting that specific data owner's license terms before use — there's no single blanket "the whole catalog is open" answer. It's also a step outside the project's current asset/infrastructure/event framing (animals aren't infrastructure), so even where data is open it would need a deliberate product decision about fit, not just a plumbing decision. |
 
 ---
 
-## Considered and not recommended
+## Removed from consideration — not free, or not workable
 
 | Source | Why it's out |
 |---|---|
-| **FlightRadar24 / MarineTraffic (premium tiers)** | Proprietary, ToS explicitly restrict redistribution/reuse the way this project needs; OpenSky+adsb.lol and AISStream already cover the same use case under terms the project can actually operate under. |
-| **Shodan / Censys** (internet-connected device/exposure scanning) | Technically "public" data and framed as infrastructure rather than people, which is the project's stated line — but device-level exposure/vulnerability data is a different risk category from position/telemetry data: it's directly actionable for targeting insecure systems, not just visualizing public signals. That cuts against the spirit of a tool meant for exploration/learning rather than attack surface discovery. If ever revisited, it would need to be aggregate-only (e.g., "exposed devices per country" counts) with no device-level drill-down — and even then warrants a deliberate product decision, not a default-on layer. |
-| **NetBlocks, IMB Piracy Reporting, PowerOutage.us (free tier), AISHub** | Good content, blocked on access model (no stable open API, reciprocity requirements, or paywalled beyond a token-level free tier) rather than on fit — worth re-checking periodically in case terms/APIs change. |
+| **ACLED** (conflict event data) | The freely-registered `myACLED` tier gives aggregated dashboard-level access only; the disaggregated, geocoded event-level API needed for an actual map layer sits behind Research/Partner/Enterprise tiers, and **commercial use requires a corporate license** outright. Not free for the access level this project would need. |
+| **AISHub** | "Free" only in a barter sense — API credentials are earned by *operating your own AIS receiver* and streaming it back with ≥90% uptime and ≥10-vessel coverage over a rolling week. That's a hardware/logistics requirement, not a signup, and isn't something most deployers of this app can meet. |
+| **IMB Piracy Reporting Centre** | No structured API at any price — incident data is published as an HTML/PDF map, so there's nothing free-or-otherwise to build a live proxy against. |
+| **NetBlocks** (internet shutdown reporting) | Same problem — narrative reports published via site/social channels, no documented structured API. |
+| **PowerOutage.us** | Free access is limited to a token public dashboard; the API needed for a live layer requires a commercial data license. |
+| **FlightRadar24 / MarineTraffic (premium tiers)**, **Shodan / Censys** | Unchanged from the prior pass: proprietary ToS or, for Shodan/Censys, a risk-category mismatch (device-level exposure data is directly actionable for targeting insecure systems, not just visualization) rather than a pure cost problem — see the original research notes below. |
 
 ---
 
 ## Summary — suggested next steps in priority order
 
-1. **OpenAQ** (air quality) — clean API, no key required, strong narrative pairing with Fires/EONET smoke detections.
-2. **GPSJam** (GPS jamming/spoofing overlay) — daily static tiles, no key, a genuinely new signal type.
-3. **ReliefWeb** (humanitarian reporting) — clean REST API, complements GDELT/GDACS.
-4. **SondeHub** (radiosonde/balloon tracking) + **APRS-IS** (ham radio positions) as a paired "open spectrum" addition alongside the existing PSKReporter layer.
-5. **Cloudflare Radar** (internet outage/BGP anomaly detection) — new infrastructure-health signal alongside Datacenters/Submarine Cables.
-6. **NOAA CO-OPS** (tides & currents) — small, well-scoped complement to the existing buoy layer.
+1. **Open-Meteo Air Quality API + Flood API** — same already-integrated provider, same keyless/free pattern, two new hazard signals (air quality, river flood forecasting) for essentially the cost of two new endpoints.
+2. **GPSJam** (GPS jamming/spoofing overlay) — daily static tiles, fully free (CC-BY), a genuinely new signal type.
+3. **GWIS/EFFIS** (global wildfire danger + burnt area) — closes the "NIFC is US-only" gap with a free, global Copernicus source.
+4. **EMSC** (earthquake) + **WHO Disease Outbreak News** — both free, both new event categories (faster regional seismic, and the first health/epidemiological layer).
+5. **Global Forest Watch** (deforestation alerts) — free, open, commercially-unrestricted, and a genuinely new "human footprint" event category next to Datacenters/Dams.
+6. **SondeHub** + **APRS-IS** as a paired "open spectrum" addition alongside the existing PSKReporter layer (APRS needs a TCP client rather than REST, so scope it as its own spike).
+7. **Cloudflare Radar** (internet outage/BGP anomaly detection, NC-flagged) — new infrastructure-health signal alongside Datacenters/Submarine Cables.
+8. **NOAA CO-OPS** (tides & currents) + **USGS Volcano Notification API** — both small, free, well-scoped complements to existing buoy/volcano layers.
 
-Everything else in this document is either blocked on access model (revisit later), needs
-deliberate scoping to stay inside the project's own ethics line (ACLED, OpenSanctions), or was
-evaluated and rejected outright (Shodan/Censys, proprietary aggregators).
+Everything else in this document is either an edge-case fit that needs a deliberate product
+decision (Movebank), or was checked and found not actually free/workable at the access level
+this project needs (see the removed table above).
