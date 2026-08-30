@@ -169,6 +169,13 @@ export const DATA_CREDITS = [
       'part of NASA’s Earth Observing System Data and Information System (EOSDIS)',
   },
   {
+    key: 'rainviewer',
+    html:
+      'Weather radar &amp; infrared satellite overlays: ' +
+      '<a href="https://www.rainviewer.com" target="_blank" rel="noopener">RainViewer</a> ' +
+      '(free public API — non-commercial and small-scale use)',
+  },
+  {
     key: 'openseamap',
     html:
       'Sea marks (buoys, beacons, lighthouses, harbours): ' +

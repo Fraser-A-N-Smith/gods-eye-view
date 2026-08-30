@@ -12,6 +12,7 @@ import weatherAlertsLayer from './data/weatherAlerts.js';
 import tropicalCyclonesLayer from './data/tropicalCyclones.js';
 import vesselEventsLayer from './data/vesselEvents.js';
 import rasterOverlayLayers from './data/rasterOverlays.js';
+import rainviewerLayers from './data/rainviewerOverlays.js';
 import satellitesLayer from './data/satellites.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
 import trafficLayer from './data/traffic.js';
@@ -249,6 +250,12 @@ async function init() {
     // They render only on a globe-imagery stack; each layer reports that
     // itself rather than silently drawing nothing under Google 3D.
     for (const overlay of rasterOverlayLayers) {
+      dataManager.register(overlay);
+    }
+    // Live weather radar and IR satellite. Keyless and CORS-open, so both the
+    // frame index and the tiles are fetched straight from the browser; the two
+    // layers share one frame request per cycle.
+    for (const overlay of rainviewerLayers) {
       dataManager.register(overlay);
     }
     dataManager.register(satellitesLayer);

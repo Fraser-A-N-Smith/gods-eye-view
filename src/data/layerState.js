@@ -291,6 +291,8 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'openseamap-seamarks', token: 'o', disposition: 'enabled-only' }),
   Object.freeze({ id: 'opensnowmap-pistes', token: 'y', disposition: 'enabled-only' }),
   Object.freeze({ id: 'radio', token: 'r', disposition: 'enabled+options', optionOwner: 'radio' }),
+  Object.freeze({ id: 'rainviewer-radar', token: 'j', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'rainviewer-satellite', token: '1', disposition: 'enabled-only' }),
   Object.freeze({ id: 'rocket-launches', token: 'x', disposition: 'enabled-only' }),
   Object.freeze({ id: 'satellites', token: 's', disposition: 'enabled+options', optionOwner: 'satellites' }),
   Object.freeze({ id: 'space-weather', token: 'z', disposition: 'enabled-only' }),

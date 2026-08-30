@@ -3,6 +3,42 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (d)
+
+### Added
+
+- Added **Weather Radar** and **IR Satellite** overlays from RainViewer's free
+  public API — two independently toggleable semi-transparent
+  `Cesium.ImageryLayer`s on the globe surface. Keyless and CORS-open, so both
+  the frame index and the tiles are fetched straight from the browser with no
+  server proxy.
+- Both overlays share one frame request per cycle: `weather-maps.json` carries
+  the radar and satellite frame lists in a single document, and the two layers
+  read a shared, coalesced cache rather than fetching it twice.
+- A poll that finds the same frame already on screen is a no-op. It does not
+  rebuild the imagery layer, which would discard a warm tile cache, re-request
+  every visible tile and flicker — all to draw the identical picture.
+- A new frame is added BEFORE the old one is removed, so the globe is never
+  momentarily bare.
+- Added `invalidateFrameCache()` on both layers, so a caller that knows the
+  shared cache is stale can force a refresh without waiting out the TTL.
+
+### Changed
+
+- The radar layer states its coverage gap on its own row: radar exists only
+  where a radar network does, so a blank area means unwatched, not dry — the
+  opposite reading of the same pixels. The satellite row states that infrared
+  measures cloud-top temperature, not rainfall.
+- Only the newest **observed** radar frame is used. RainViewer also publishes a
+  nowcast, which is a forecast; rendering it identically to an observation with
+  nothing saying so is the kind of quiet claim this project avoids.
+
+### Fixed
+
+- A stale frame no longer prints an absurd hour count (`24463H 48M OLD`). Past
+  a day the readout says the feed looks stalled, which is the actual
+  information.
+
 ## [Unreleased] — 2026-08-30 (c)
 
 ### Added

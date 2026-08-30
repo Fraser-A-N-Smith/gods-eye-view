@@ -181,7 +181,7 @@ Twenty-eight tools, four jobs — the commands below come straight from the prod
 
 ## 🛰️ What's on the Globe
 
-Twenty-one live layers. **Seventeen of them need nothing at all** — no key, no account, no signup.
+Twenty-three live layers. **Nineteen of them need nothing at all** — no key, no account, no signup.
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
@@ -203,6 +203,8 @@ Twenty-one live layers. **Seventeen of them need nothing at all** — no key, no
 | 🌌 **Space Weather** | The auroral oval and planetary K-index — and what a storm means for the radio, satellite and GNSS layers | NOAA SWPC | 🟢 |
 | 🔥 **Fire Perimeters** | The mapped burn edge, not just the hotspot — with containment | NIFC / WFIGS | 🟢 |
 | 🛰️ **Vessel Events** | AIS **gaps**, encounters, loitering and port visits — the ships that went quiet. ⚠️ non-commercial licence | Global Fishing Watch | 🟡 |
+| 🌧️ **Weather Radar** | Live precipitation reflectivity as a semi-transparent globe overlay, refreshed on RainViewer's ~10 min cadence. Blank means no radar there, not no rain | RainViewer | 🟢 |
+| 🛰️ **IR Satellite** | Near-global infrared cloud cover — cloud-top temperature, not rainfall | RainViewer | 🟢 |
 | ⚓ **Sea Marks** | Buoys, beacons, lighthouses and harbours as a transparent overlay on the globe | OpenSeaMap | 🟢 |
 | ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |

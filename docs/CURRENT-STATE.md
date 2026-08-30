@@ -2,6 +2,42 @@
 
 Updated: August 30, 2026
 
+> **2026-08-30 — RainViewer radar + IR satellite**
+> (`src/data/rainviewerOverlays.js`, `rainviewerFrames.js`). Two independently
+> toggleable semi-transparent globe imagery overlays, browser-direct — the
+> source is keyless and CORS-open, so there is no proxy and nothing
+> server-side to configure.
+>
+> **A same-frame poll must not touch the scene.** RainViewer publishes about
+> every ten minutes and the layer polls on that cadence, so most polls return
+> the frame already displayed. `update()` compares the frame timestamp FIRST
+> and returns early; rebuilding the imagery layer for an identical frame throws
+> away a warm tile cache, re-requests every visible tile and flickers.
+> `getFrameState().unchangedPolls` counts the no-ops, and a unit test plus the
+> in-browser check both assert the imagery is untouched across repeat polls.
+>
+> **A new frame is added BEFORE the old is removed.** Remove-then-add would
+> flash the basemap through. Verified in-browser: the layer count is net-zero
+> across a swap and the URL advances.
+>
+> **One frame request serves both overlays.** `weather-maps.json` carries both
+> frame lists, so the layers share a module-level coalesced cache — two layers
+> polling in the same tick share one in-flight request. `invalidateFrameCache()`
+> on either layer drops it for both; without that seam nothing could force a
+> refresh inside the TTL.
+>
+> **Observed frames only.** `radar.past`, never `radar.nowcast` — the nowcast
+> is a forecast and would render identically to an observation.
+>
+> **Radar coverage is not global and the row says so.** Blank means no radar
+> network there, which is the opposite of "no rain there". The satellite row
+> separately states that IR is cloud-top temperature, not rainfall, because the
+> two overlays look similar and do not mean the same thing.
+>
+> Same globe-visibility rule as the other surface overlays: hidden under Google
+> 3D, reported as guidance (`status: 'zoom-in'`), revealed by a stack switch
+> with no reload.
+
 > **2026-08-30 — raster overlays** (`src/data/rasterOverlays.js`). OpenSeaMap
 > sea marks and OpenSnowMap pistes, as independently toggleable
 > `Cesium.ImageryLayer`s on the globe surface.
