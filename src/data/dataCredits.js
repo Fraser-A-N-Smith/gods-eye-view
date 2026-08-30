@@ -121,6 +121,12 @@ export const DATA_CREDITS = [
       '<a href="https://eonet.gsfc.nasa.gov" target="_blank" rel="noopener">NASA EONET</a>',
   },
   {
+    key: 'gvp',
+    html:
+      'Volcano data: Global Volcanism Program, Smithsonian Institution — ' +
+      '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

@@ -44,6 +44,7 @@ import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js'
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
 import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
+import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -2331,6 +2332,136 @@ function globalHazardsProxy() {
 
   return {
     name: 'global-hazards-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Volcanoes proxy — Smithsonian Institution Global Volcanism Program (GVP)
+ * Holocene volcano inventory, filtered to recently active volcanoes.
+ *
+ * The upstream WFS service is keyless and public, but a direct browser fetch
+ * cannot be trusted to receive permissive CORS headers (same reasoning as
+ * `spaceWeatherProxy` above), so this proxy fetches it, filters, and
+ * normalizes server-side, serving `{ volcanoes: [...], retrievedAt }`.
+ *
+ * The filter (eruption since `MIN_ERUPTION_YEAR`) and field mapping live in
+ * the Cesium-free `src/data/volcanoesShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js` precedent) and are imported
+ * directly below — this proxy and the browser layer run the SAME
+ * `mapVolcanoFeature` implementation, so there is nothing here to fall out of
+ * sync. `volcanoesShape.test.mjs` covers the filter contract once.
+ *
+ * Unlike most feeds here, GVP eruption history is static-ish — it does not
+ * change day to day — so the TTL is a full 24 hours rather than minutes.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function volcanoesProxy() {
+  const TTL_MS = 24 * 60 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_VOLCANOES = 500;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'volcanoes-v1.json');
+  const VOLCANOES_URL = 'https://webservices.volcano.si.edu/geoserver/GVP-VOTW/ows'
+    + '?service=WFS&version=2.0.0&request=GetFeature'
+    + '&typeName=GVP-VOTW:Smithsonian_VOTW_Holocene_Volcanoes&outputFormat=json';
+  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[volcanoes-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(VOLCANOES_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const features = Array.isArray(parsed?.features) ? parsed.features : [];
+    const volcanoes = [];
+    for (const feature of features) {
+      const mapped = mapVolcanoFeature(feature);
+      if (mapped) volcanoes.push(mapped);
+    }
+
+    const body = JSON.stringify({
+      volcanoes: volcanoes.slice(0, MAX_VOLCANOES),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/volcanoes', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'volcanoes', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[volcanoes-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Volcanoes unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'volcanoes-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -8499,6 +8630,7 @@ export default defineConfig(({ mode }) => {
       gdeltEventsProxy(),
       spaceWeatherProxy(),
       globalHazardsProxy(),
+      volcanoesProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),
