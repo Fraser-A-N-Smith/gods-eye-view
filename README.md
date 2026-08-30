@@ -69,7 +69,7 @@ The live layers are grounded in public feeds: the airliner crossing your screen 
 
 Requires Node.js 24.14.x or 26.x (enforced by `package.json`).
 
-1. Copy `.env.example` → `.env` and set `GOOGLE_MAPS_API_KEY`.
+1. Copy `.env.example` → `.env` and set `GOOGLE_MAPS_API_KEY`. (The app now starts without it — you get the keyless OSM globe instead of the photorealistic one — but the photoreal planet is most of the point, so set it if you can.)
 2. Install and run:
 
 ```bash
@@ -92,7 +92,7 @@ npm run dev -- --host localhost --port 4173
 > that could cost money.
 > ```
 
-**That one key is the whole entry fee.** Everything in this README is color-coded — 🟢 needs nothing · 🟡 free key · 🔴 metered — and Google Maps is the only 🔴 you need: it buys the photorealistic planet, and most of the globe lights up 🟢 from there. For typical solo exploring, expect **$0 on most layers** and pocket change on the metered two: Google currently gives **1,000 free 3D-tile sessions a month** — each good for up to three hours of rendering, which is very hard for one person to exhaust — and voice carries a built-in $5 session cap. Full map in [Keys & Costs](#-api-keys), full honest breakdown in [What it actually costs](#-what-it-actually-costs).
+**That one key is the whole entry fee.** Everything in this README is color-coded — 🟢 needs nothing · 🟡 free key · 🔴 metered — and Google Maps is the only 🔴 you need: it buys the photorealistic planet, and most of the globe lights up 🟢 from there. It is not required to *launch* — without it the app opens on the keyless OSM globe, and a Cesium ion token reaches the same photoreal tiles through ion's mirror — but it is what you want for the experience the screenshots show. For typical solo exploring, expect **$0 on most layers** and pocket change on the metered two: Google currently gives **1,000 free 3D-tile sessions a month** — each good for up to three hours of rendering, which is very hard for one person to exhaust — and voice carries a built-in $5 session cap. Full map in [Keys & Costs](#-api-keys), full honest breakdown in [What it actually costs](#-what-it-actually-costs).
 
 The dev server binds to **localhost** — your keys stay on your machine. Sharing on a LAN safely is covered in [Sharing an instance](#-sharing-an-instance) and [SECURITY.md](SECURITY.md).
 
@@ -185,7 +185,7 @@ Twenty-three live layers. **Nineteen of them need nothing at all** — no key, n
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
-| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM, NASA GIBS (today's satellite mosaic + GOES GeoColor), Copernicus Sentinel-1 SAR & Sentinel-2 | Google / Ion / OSM / NASA / ESA | 🔴 Google (required) · 🟡 ion for Bing · 🟢 OSM & GIBS · 🟡 Copernicus |
+| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM, NASA GIBS (today's satellite mosaic + GOES GeoColor), Copernicus Sentinel-1 SAR & Sentinel-2 | Google / Ion / OSM / NASA / ESA | 🔴 Google *or* 🟡 ion for photoreal · 🟡 ion for Bing · 🟢 OSM & GIBS · 🟡 Copernicus |
 | ✈️ **Live Flights** | Thousands of live aircraft + route history | OpenSky + adsb.lol | 🟢 (🟡 optional for more polling credits) |
 | 🎖️ **Military Flights** | ADS-B military traffic in amber | adsb.lol | 🟢 |
 | 🚢 **Live Vessels** | Thousands of ships worldwide | AISStream | 🟡 |
@@ -299,13 +299,22 @@ Five keys cover the fully keyed experience. Three currently offer no-cost develo
 
 | | Key | Why | Get it |
 |---|-----|-----|--------|
-| 🔴 | **Google Maps** *(required)* | The photorealistic 3D planet ([Map Tiles API](https://developers.google.com/maps/documentation/tile)) | [Google Cloud Console](https://console.cloud.google.com/) — metered; [check current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and URL-restrict it |
+| 🔴 | **Google Maps** *(strongly recommended)* | The photorealistic 3D planet ([Map Tiles API](https://developers.google.com/maps/documentation/tile)), plus place search and geocoding | [Google Cloud Console](https://console.cloud.google.com/) — metered; [check current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and URL-restrict it. Not needed to launch: without it you get the OSM globe, and a Cesium ion token reaches the same photoreal tiles |
 | 🔴 | **OpenAI** | 🎙️ The voice experience + AI HUD summary. Want another provider behind the mic? PRs welcome | [platform.openai.com](https://platform.openai.com) — metered; [check current API pricing](https://openai.com/api/pricing/) |
 | 🟡 | **AISStream** | 🚢 Live global ships | [aisstream.io](https://aisstream.io) — free, seriously, it's a two-minute signup |
 | 🟡 | **NASA FIRMS** | 🔥 Live active fires | [firms.modaps.eosdis.nasa.gov](https://firms.modaps.eosdis.nasa.gov/api/map_key/) — free |
 | 🟡 | **TomTom** | 🚦 Real traffic instead of an approximate simulation | [developer.tomtom.com](https://developer.tomtom.com) — check the current developer allowance for your account |
 
 *What the TomTom key buys you: step 5 of [The First Five Minutes](#-the-first-five-minutes) for real — actual rush-hour density painted on the city instead of an approximate simulation.*
+
+> [!TIP]
+> **Photoreal not loading? In the EEA?** Google Maps Platform accounts billed in
+> the European Economic Area can be refused by the Map Tiles API with a **401**
+> even when the key is valid and billing is live. Set a **`CESIUM_ION_TOKEN`**
+> and the app will reach the *same* Google tiles through Cesium ion's mirror
+> (asset 2275207) automatically — it tries Google direct first, falls back to
+> ion, and only then drops to the OSM globe. The startup log names which route
+> it took and why.
 
 ### Cherry on top
 

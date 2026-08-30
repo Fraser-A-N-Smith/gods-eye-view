@@ -63,6 +63,7 @@ export class MapStackController {
     googleTileset = null,
     cesiumToken = '',
     initialStack = 'photoreal',
+    photorealUnavailableReason = null,
     onChange = null,
     onError = null,
   } = {}) {
@@ -78,6 +79,15 @@ export class MapStackController {
     this._lastError = null;
     /** Runtime probe outcomes for credentialled stacks, keyed by stack id. */
     this._availability = new Map();
+    /**
+     * Why photoreal could not be acquired, when it could not.
+     *
+     * Supplied by the startup source chain, which is the only thing that knows
+     * whether a key was absent or present-and-refused. Without it the tray can
+     * only say "unavailable", which is exactly the dead end that made an EEA
+     * 401 so hard to diagnose (#59).
+     */
+    this._photorealUnavailableReason = photorealUnavailableReason;
     // Tracks which terrain PROVIDER is actually installed on the scene, not
     // just an ion-available boolean: 'world' (Cesium World Terrain, ion
     // token), 'keyless' (Re:Earth or its Ellipsoid fallback), or null (never
@@ -126,6 +136,9 @@ export class MapStackController {
    * @returns {string}
    */
   _unavailableReason(stack) {
+    if (stack?.kind === 'photoreal' && this._photorealUnavailableReason) {
+      return this._photorealUnavailableReason;
+    }
     if (stack?.requiresIon) return 'Cesium ion token required for Bing stacks';
     if (stack?.requiresRuntimeProbe) {
       const probed = this._availability.get(stack.id);

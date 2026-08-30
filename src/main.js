@@ -39,6 +39,12 @@ import {
   releaseContinuousRender,
 } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
+import {
+  PHOTOREAL_ION_ASSET_ID,
+  loadPhotorealTileset,
+  describePhotorealOutcome,
+  photorealUnavailableReason,
+} from './photorealTileset.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
 import { initTimeline } from './timeline/index.js';
 
@@ -88,15 +94,22 @@ async function init() {
       Cesium.Ion.defaultAccessToken = cesiumToken;
     }
 
-    // Set Google Maps API key for 3D Tiles
+    // Google Maps API key for 3D Tiles. NOT required to start: an absent key
+    // means no direct photoreal, which the source chain below handles by
+    // falling back to Cesium ion's mirror and then to the keyless OSM globe.
+    // Throwing here used to make a missing key a blank error screen instead of
+    // a working app on a lesser basemap (#64).
     const googleApiKey = import.meta.env.GOOGLE_MAPS_API_KEY;
-    if (!googleApiKey) {
-      throw new Error('GOOGLE_MAPS_API_KEY not found. Set it as an environment variable.');
+    if (googleApiKey) {
+      Cesium.GoogleMaps.defaultApiKey = googleApiKey;
+      // Consumed by geocoding in locations.js, the annotation resolver, and
+      // voice. Each already returns null or reports plainly without it, so
+      // leaving it unset degrades those features rather than the app.
+      window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
+    } else {
+      console.warn('[Init] No GOOGLE_MAPS_API_KEY — geocoding and place search are unavailable; '
+        + 'the globe falls back to the Cesium ion mirror or OSM.');
     }
-    Cesium.GoogleMaps.defaultApiKey = googleApiKey;
-
-    // Expose API key globally for geocoding in locations.js
-    window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
 
     // Create the Cesium viewer with minimal chrome
     const viewer = new Cesium.Viewer('cesiumContainer', {
@@ -162,22 +175,43 @@ async function init() {
     viewer.scene.skyAtmosphere.saturationShift = -0.12;
     viewer.scene.skyAtmosphere.brightnessShift = -0.08;
 
-    loaderStatus.textContent = 'Loading Google 3D Tiles...';
-    let tileset = null;
-    try {
-      // Load Google Photorealistic 3D Tiles
-      tileset = await Cesium.createGooglePhotorealistic3DTileset({
-        onlyUsingWithGoogleGeocoder: true,
-      });
+    loaderStatus.textContent = 'Loading photorealistic 3D globe...';
+
+    // Ordered source chain: Google direct → Cesium ion's mirror of the same
+    // tileset → nothing (the keyless OSM globe). ion is what gives EEA-billed
+    // accounts a route to photoreal when the Map Tiles API 401s them
+    // directly (#59), because ion serves the identical tiles under its own
+    // entitlement. Never throws: exhausting the chain is a supported outcome.
+    const photoreal = await loadPhotorealTileset({
+      googleApiKey,
+      cesiumIonToken: cesiumToken,
+      onAttempt: (source) => {
+        loaderStatus.textContent = `Loading ${source.label}...`;
+      },
+      loaders: {
+        google: () => Cesium.createGooglePhotorealistic3DTileset({
+          onlyUsingWithGoogleGeocoder: true,
+        }),
+        ion: () => Cesium.Cesium3DTileset.fromIonAssetId(PHOTOREAL_ION_ASSET_ID),
+      },
+    });
+
+    const tileset = photoreal.tileset;
+    const photorealSummary = describePhotorealOutcome(photoreal);
+    for (const attempt of photoreal.attempts) {
+      if (attempt.status === 'failed') console.warn(`[Init] photoreal source failed — ${attempt.detail}`);
+    }
+    console.log(`[Init] Globe: ${photorealSummary}`);
+
+    if (tileset) {
       viewer.scene.primitives.add(tileset);
-      // NOTE: Cesium World Terrain intentionally disabled — conflicts with Google 3D Tiles at high zoom.
-      // Google Photorealistic 3D Tiles provide their own terrain/elevation.
+      // NOTE: Cesium World Terrain intentionally disabled — conflicts with the
+      // photoreal tiles at high zoom. They carry their own terrain/elevation.
       viewer.scene.globe.show = false;
-    } catch (tileError) {
-      console.warn('[Init] Google 3D Tiles unavailable, falling back to Cesium globe:', tileError);
-      const tileErrorDetail = describeError(tileError);
-      loaderStatus.textContent = `Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`;
-      // Keep Cesium globe visible as fallback instead of aborting the app.
+    } else {
+      // The keyless path. The globe stays visible and MapStackController opens
+      // on OSM, which needs no credentials at all.
+      loaderStatus.textContent = photorealSummary;
       viewer.scene.globe.show = true;
     }
 
@@ -187,6 +221,9 @@ async function init() {
       googleTileset: tileset,
       cesiumToken,
       initialStack: tileset ? 'photoreal' : 'osm',
+      // Says which credential would have helped, or which one was refused,
+      // instead of a generic "unavailable" in the map-source tray.
+      photorealUnavailableReason: photorealUnavailableReason(photoreal),
       // Task 5 (height-datum fix): rebroadcast stack changes as a window
       // CustomEvent so data layers (CCTV per-regime ground resolution) can
       // react without coupling MapStackController to layer modules. Fires on
@@ -366,6 +403,7 @@ async function init() {
       viewer,
       styleManager,
       tileset,
+      photoreal,
       dataManager,
       sceneDirector,
       timeline,

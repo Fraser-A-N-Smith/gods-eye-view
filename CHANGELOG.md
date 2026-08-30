@@ -3,6 +3,32 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (e)
+
+### Fixed
+
+- **The app no longer refuses to start without `GOOGLE_MAPS_API_KEY` (#64).**
+  `main.js` hard-threw before the viewer existed, so a missing key produced a
+  blank error screen rather than the perfectly good keyless globe the map-stack
+  controller has always supported. Photoreal is now acquired through an ordered
+  chain — Google direct → Cesium ion's mirror → none — and running out of
+  options degrades to the OSM globe instead of to nothing.
+- **EEA accounts refused by the Map Tiles API now have a route to photoreal
+  (#59).** A Google Maps account billed in the European Economic Area can get a
+  401 even with a valid key and live billing. Setting `CESIUM_ION_TOKEN` now
+  reaches the same Google tiles through ion's mirror (asset 2275207)
+  automatically, per the community workaround in #71.
+
+### Changed
+
+- The startup log and the map-source tray distinguish a credential that was
+  never set from one that was set and refused. Those are different problems —
+  one is a choice, the other is something the operator needs told about — and
+  reporting both as "unavailable" is what made an EEA 401 hard to diagnose.
+- `README.md` and `.env.example` no longer describe the Google Maps key as
+  required. It is strongly recommended (it buys photoreal, place search and
+  geocoding) but the app runs without it.
+
 ## [Unreleased] — 2026-08-30 (d)
 
 ### Added

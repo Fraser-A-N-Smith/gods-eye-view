@@ -2,6 +2,32 @@
 
 Updated: August 30, 2026
 
+> **2026-08-30 — photoreal source chain** (`src/photorealTileset.js`).
+> Startup no longer throws without a Google Maps key.
+>
+> **An unavailable basemap must never take the app down.** `main.js` used to
+> hard-throw before the viewer was constructed (#64), so no key meant no app —
+> not even the keyless OSM globe the map stack already supported.
+> `loadPhotorealTileset()` never throws: exhausting the chain returns
+> `{tileset: null}` and the app opens on OSM.
+>
+> **The chain is Google direct → Cesium ion mirror → none.** ion asset
+> **2275207** is ion's published mirror of the same Google tileset, served
+> under ion's own entitlement, which is why it works for EEA-billed accounts
+> that the Map Tiles API 401s directly (#59). Google is still preferred when
+> available: same imagery, one less intermediary.
+>
+> **Skipped is not failed.** A source with no credential is recorded as
+> `skipped` with the env var that would have enabled it; a source that was
+> tried and refused is `failed` with the upstream message. The loader line, the
+> console, and the map-source tray all keep that distinction, because "you have
+> no key" and "your key was rejected" need different actions from the operator.
+>
+> **The Google key is optional everywhere else too.** `locations.js`,
+> `annotationResolver.js` and `gevActions.js` already guarded
+> `window.__GOOGLE_MAPS_API_KEY__`; main.js now only sets it when present, so
+> place search and geocoding degrade rather than the app failing.
+
 > **2026-08-30 — RainViewer radar + IR satellite**
 > (`src/data/rainviewerOverlays.js`, `rainviewerFrames.js`). Two independently
 > toggleable semi-transparent globe imagery overlays, browser-direct — the
