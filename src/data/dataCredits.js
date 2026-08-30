@@ -127,6 +127,13 @@ export const DATA_CREDITS = [
       '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
   },
   {
+    key: 'ndbc',
+    html:
+      'Ocean buoy observations: NOAA National Data Buoy Center — ' +
+      '<a href="https://www.ndbc.noaa.gov" target="_blank" rel="noopener">ndbc.noaa.gov</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

@@ -50,6 +50,7 @@ How to read this:
 | **GDACS** | Global disaster alerts — floods and droughts | Free public API, no key, courtesy citation requested | "GDACS — Global Disaster Alert and Coordination System" |
 | **NASA EONET** | Natural event tracker — severe storms, landslides, sea/lake ice, temperature extremes, dust/haze, snow, water color | US public domain | "NASA EONET" |
 | **Smithsonian Global Volcanism Program** | Volcanoes with eruptions since 1900 | Free public WFS service; citation requested | "Global Volcanism Program, Smithsonian Institution" |
+| **NOAA National Data Buoy Center** | Ocean buoy observations — wind, wave height, sea/air temperature | US public domain | "NOAA National Data Buoy Center" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 
 ### Notes on the live sources

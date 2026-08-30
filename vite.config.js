@@ -45,6 +45,7 @@ import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from '.
 import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
+import { parseNdbcText } from './src/data/oceanBuoysShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -2462,6 +2463,128 @@ function volcanoesProxy() {
 
   return {
     name: 'volcanoes-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Ocean Buoys proxy — NOAA National Data Buoy Center (NDBC) `latest_obs.txt`,
+ * the latest observation from roughly 800 buoy and coastal stations
+ * worldwide.
+ *
+ * The upstream is keyless and public, but it is plain FIXED-WIDTH TEXT, not
+ * JSON — parsing that in the browser would mean shipping the raw feed (and
+ * its two `#`-prefixed header lines, and its `MM` missing-value markers)
+ * straight to every client. This proxy fetches it once, parses and
+ * normalizes server-side, and serves `{ buoys: [...], retrievedAt }`.
+ *
+ * The fixed-width parser (`parseNdbcLine`/`parseNdbcText`) lives in the
+ * Cesium-free `src/data/oceanBuoysShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`
+ * precedent) and is imported directly below — this proxy and the browser
+ * layer run the SAME `parseNdbcText` implementation, so there is nothing
+ * here to fall out of sync. `oceanBuoysShape.test.mjs` covers the parser
+ * contract once.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function oceanBuoysProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_BUOYS = 900;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ocean-buoys-v1.json');
+  const BUOYS_URL = 'https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt';
+  const ATTRIBUTION = 'NOAA National Data Buoy Center (US public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[ocean-buoys-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(BUOYS_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const buoys = parseNdbcText(text);
+
+    const body = JSON.stringify({
+      buoys: buoys.slice(0, MAX_BUOYS),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/ocean-buoys', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'ocean-buoys', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[ocean-buoys-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Ocean buoys unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'ocean-buoys-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -8631,6 +8754,7 @@ export default defineConfig(({ mode }) => {
       spaceWeatherProxy(),
       globalHazardsProxy(),
       volcanoesProxy(),
+      oceanBuoysProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),
