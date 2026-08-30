@@ -37,7 +37,7 @@
  * Exit codes: 0 = no FAILs · 1 = at least one FAIL · 2 = target unreachable.
  */
 import puppeteer from 'puppeteer';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -286,6 +286,7 @@ async function jget(path, { method = 'GET', timeoutMs = 25000, body = null } = {
 
 function sh(cmd, args, { cwd = REPO_ROOT, env: extraEnv = {}, timeoutMs = 600000 } = {}) {
   return new Promise((resolveP) => {
+    const isWindows = process.platform === 'win32';
     const child = spawn(cmd, args, {
       cwd,
       env: { ...process.env, ...extraEnv },
@@ -293,11 +294,23 @@ function sh(cmd, args, { cwd = REPO_ROOT, env: extraEnv = {}, timeoutMs = 600000
       // Own process group: killing a timed-out harness must also take its
       // Chromium descendants down. An orphaned browser keeps a GPU context and
       // a websocket alive and contaminates every later check in the fleet.
-      detached: true,
+      // Windows has no POSIX process groups — `detached` there just gives the
+      // child its own console — so the tree is torn down with taskkill /T
+      // instead (see killTree below).
+      detached: !isWindows,
     });
     let out = '';
     let err = '';
     const killTree = () => {
+      if (isWindows) {
+        // `process.kill(-pid)` is not a thing on Windows — a negative pid
+        // throws — and killing the harness alone leaves its Chromium running.
+        // taskkill /T walks the child's descendants, which is the whole point.
+        try {
+          spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        } catch { try { child.kill(); } catch { /* gone */ } }
+        return;
+      }
       // Negative pid = the whole process group. Fall back to the bare child if
       // the group is already gone.
       try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
@@ -309,7 +322,9 @@ function sh(cmd, args, { cwd = REPO_ROOT, env: extraEnv = {}, timeoutMs = 600000
       clearTimeout(timer);
       // Sweep the group again on normal exit too: a harness that leaks its
       // browser would otherwise leave it running for the rest of the matrix.
-      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already reaped */ }
+      if (!isWindows) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already reaped */ }
+      }
       resolveP({ code, signal, out, err, timedOut: signal === 'SIGKILL' });
     });
     child.on('error', (e) => {

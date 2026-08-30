@@ -1,0 +1,47 @@
+# Line endings.
+#
+# Without this file, Git for Windows checks out every text file with CRLF by
+# default. That is harmless for JavaScript, and fatal for shell scripts: a
+# `#!/usr/bin/env bash` line ending in CR makes the kernel look for an
+# interpreter literally named "bash\r", and the script dies with a confusing
+# "bad interpreter" error. The macOS launchers are still run on Windows through
+# WSL and Git Bash, so they are pinned to LF regardless of platform or the
+# user's core.autocrlf setting.
+
+* text=auto eol=lf
+
+*.sh            text eol=lf
+*.mjs           text eol=lf
+*.js            text eol=lf
+*.json          text eol=lf
+*.html          text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.geojson       text eol=lf
+*.geojsonl      text eol=lf
+*.csv           text eol=lf
+.env.example    text eol=lf
+
+# Binary assets: never normalized, never diffed as text. Marking them keeps a
+# checkout from corrupting them and keeps the media out of textual diffs.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
+*.mp4           binary
+*.glb           binary
+*.gltf          binary
+*.pbf           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+
+# SVG is text (it is markup) but is rarely worth reviewing as a diff.
+*.svg           text eol=lf -diff
+
+# Generated: keep it out of review noise without changing how it is stored.
+package-lock.json text eol=lf -diff linguist-generated

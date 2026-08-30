@@ -98,6 +98,8 @@ The dev server binds to **localhost** — your keys stay on your machine. Sharin
 
 **macOS shortcut:** `./scripts/dev-fresh.sh` clears the Vite cache and pulls your keys straight from the Keychain.
 
+**Windows / Linux:** everything above works as written — `npm install`, `npm run dev`, `npm test`, and `npm run build` are plain Node and need no shell. On Windows, use `copy .env.example .env` (cmd) or `Copy-Item .env.example .env` (PowerShell) for step 1. `npm run dev:secure` is the cross-platform launcher: it finds your keys in the environment, the Keychain (macOS only), or `.env`, tells you which source each came from, and starts the server. The `.sh` scripts remain macOS/Linux-only and nothing needs them.
+
 ---
 
 ## 🕐 The First Five Minutes
@@ -312,7 +314,7 @@ OPENAI_API_KEY="…" AISSTREAM_API_KEY="…" npm run dev -- --host localhost --p
 
 On macOS you can also keep any key in the Keychain and `./scripts/dev-fresh.sh` pulls them in — the `security add-generic-password` service names are documented in `.env.example`.
 
-OpenSky can run fully anonymous (`OPENSKY_AUTH_MODE=anon`), or import OAuth credentials with `./scripts/opensky-import-client.sh /path/to/credentials.json`.
+OpenSky can run fully anonymous (`OPENSKY_AUTH_MODE=anon`), or import OAuth credentials with `npm run opensky:import -- /path/to/credentials.json` (works everywhere: the Keychain on macOS, `.env` elsewhere).
 
 ### 💸 What it actually costs
 

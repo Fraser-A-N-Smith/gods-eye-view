@@ -14,8 +14,8 @@
  * Add --teeth to run the negative control (removes the bar; every
  * bar-dependent section must go red).
  */
-import fs from 'node:fs';
 import puppeteer from 'puppeteer';
+import { resolveChrome } from './lib/chrome.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -26,14 +26,8 @@ const APP_URL = option('--url', process.env.QA_BASE_URL || 'http://localhost:417
 const HEADFUL = args.includes('--headful');
 const TEETH = args.includes('--teeth');
 
-const chromeCandidates = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-const chrome = chromeCandidates.find((candidate) => {
-  try { return fs.existsSync(candidate); } catch { return false; }
+const chrome = resolveChrome({
+  puppeteerPath: (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
 });
 
 const results = [];

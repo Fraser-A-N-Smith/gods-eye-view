@@ -21,20 +21,39 @@ export function assertNode24AllocationRuntime(version = process.versions.node) {
   return version;
 }
 
+/**
+ * Roots scanned for unit tests.
+ *
+ * `scripts/` is included because the launcher and tooling helpers under
+ * `scripts/lib/` carry real logic — credential precedence, platform seams —
+ * that used to live in bash and therefore could not be tested at all. A test
+ * that only the author remembers to run is not a gate.
+ */
+export const UNIT_TEST_ROOTS = Object.freeze(['src', 'scripts']);
+
 /** Discover repository unit tests in stable path order. */
 export function discoverUnitTestFiles(root = process.cwd()) {
-  const sourceRoot = path.join(root, 'src');
   const files = [];
   const visit = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(absolute);
       else if (entry.isFile() && entry.name.endsWith('.test.mjs')) {
+        // Separators are normalized to '/' so the discovered list, the plan,
+        // and the allocation allowlist compare equal on Windows too.
         files.push(path.relative(root, absolute).split(path.sep).join('/'));
       }
     }
   };
-  visit(sourceRoot);
+  for (const testRoot of UNIT_TEST_ROOTS) {
+    const absolute = path.join(root, testRoot);
+    try {
+      visit(absolute);
+    } catch (error) {
+      // A missing optional root is not a failure; a missing `src` is.
+      if (testRoot === 'src') throw error;
+    }
+  }
   return files.sort();
 }
 

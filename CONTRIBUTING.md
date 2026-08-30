@@ -12,8 +12,20 @@ cd gods-eye-view
 nvm install 24.14.0
 nvm use 24.14.0
 npm install
-./scripts/dev-fresh.sh        # or: GOOGLE_MAPS_API_KEY="…" npm run dev
+npm run dev:secure            # cross-platform launcher (macOS/Windows/Linux)
 ```
+
+`npm run dev:secure` resolves your keys from the environment, the macOS
+Keychain, or `.env` — in that order — reports which source each came from
+(never the value), and starts Vite. On macOS `./scripts/dev-fresh.sh` does more
+(it also clears the Vite cache); the `.sh` scripts are macOS/Linux-only and
+nothing in the build or test path needs them.
+
+**Windows** is fully supported: `npm install`, `npm run dev`, `npm run
+dev:secure`, `npm test`, and `npm run build` are plain Node. Use
+`Copy-Item .env.example .env` in PowerShell. Keep `.gitattributes` in force —
+it pins shell scripts to LF, without which Git for Windows checks them out with
+CRLF and they fail with a `bad interpreter` error under WSL and Git Bash.
 
 You need a **Google Maps API key** with the Map Tiles API enabled (see the [README](README.md#-api-keys)). Most data layers work with no other accounts. On macOS the launcher pulls keys from the Keychain; on any platform you can pass them as env vars or use a `.env` (copy `.env.example`).
 
