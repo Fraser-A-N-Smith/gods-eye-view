@@ -196,7 +196,7 @@
 
   Mirror the earthquakes test list (analyst record shape, missing-field discipline, JSON-safety, lifecycle with mocked fetch, error/recovery). Include one test asserting the color-band boundaries (`lastEruptionYear: 2015` → red, `1960` → orange, `1920` → yellow).
 
-- [ ] **Step 4–7: Register** (main.js import + `dataManager.register(volcanoesLayer)`; `layerState.js` entry `{ id: 'volcanoes', token: '2', disposition: 'enabled-only' }` inserted alphabetically right before `weather-alerts`... check current alphabetical position live, it sorts after `traffic`/`tropical-cyclones` and before `vessel-events`; dataCredits.js entry:
+- [ ] **Step 4–7: Register** (main.js import + `dataManager.register(volcanoesLayer)`; `layerState.js` entry `{ id: 'volcanoes', token: '2', disposition: 'enabled-only' }` inserted alphabetically after `vessel-events` and before `weather-alerts` (verified by direct string comparison: `"vessel-events" < "volcanoes" < "weather-alerts"`); dataCredits.js entry:
 
   ```js
   {
@@ -330,7 +330,7 @@ Columns in order: `STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD P
 
   Plus the standard lifecycle + analyst-record-JSON-safety tests mirroring `earthquakes.test.mjs`.
 
-- [ ] **Step 5–7: Register.** `layerState.js` token `3`, id `ocean-buoys` (sorts after `local-firms`, before `military`). Credit:
+- [ ] **Step 5–7: Register.** `layerState.js` token `3`, id `ocean-buoys` (sorts after `military-installations`, before `openseamap-seamarks` — verified by direct string comparison). Credit:
 
   ```js
   {
@@ -716,7 +716,8 @@ Response `elements[]` items have `tags.power === 'plant'` or `tags.amenity === '
     assert.equal(r.lat, 4.0);
     assert.equal(r.lon, -115.4);
     assert.equal(r.energyKt, 3.9);
-    assert.equal(r.altitudeKm, null);
+    assert.equal(r.altitudeKm, 37.0);
+    assert.equal(r.velocityKmS, null);
   });
 
   test('mapFireballRow: N/E stays positive', () => {
