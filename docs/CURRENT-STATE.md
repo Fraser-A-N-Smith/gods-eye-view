@@ -1,6 +1,78 @@
 # God's Eye View Current State
 
-Updated: August 24, 2026
+Updated: August 30, 2026
+
+> **2026-08-30 — timeline scrubber** (`src/timeline/`, `#timeline-bar`, styles
+> at the tail of `style.css`, toggled with `T`). A rolling in-memory buffer of
+> observed entity positions, plus transport controls to scrub it.
+>
+> **It records only what was already fetched.** `TimelineRecorder` reads each
+> layer's existing `getAnalystRecords()` snapshot — the same seam the voice
+> analyst uses — on a 15 s cadence. It never calls `update()` and never issues
+> a request, which is the whole reason rewind can be keyless and free. A unit
+> test pins that: recording a layer whose `update`/`enable` are instrumented
+> must leave those counters at zero.
+>
+> **Three refusals are structural, not cosmetic.** (1) `sampleAt()` outside the
+> recorded range returns `null` rather than clamping to the nearest edge frame
+> — a clamped edge would present the oldest retained frame as the state at a
+> time nobody observed. (2) Interpolation stops at `maxInterpolationGapMs`
+> (25 s): a real feed outage stays a visible hole instead of a smooth glide
+> across minutes nobody watched. (3) The status line distinguishes
+> `OBSERVED FIX` / `INTERPOLATED` / `HELD LAST FIX`, and per-source coverage
+> chips report each layer's OWN observed span, which is routinely shorter than
+> the buffer's — a layer switched on two minutes ago has two minutes of past.
+>
+> **Memory is bounded by a sample budget, not by frames or minutes.** Neither
+> of those bounds anything on its own: the same 30-minute window holds a
+> handful of vessels over open ocean and thousands of aircraft over Europe.
+> `maxTotalSamples` (250k, ~25 MB) is the real guard, and when the budget
+> rather than the window sets the floor the bar says so (`budgetLimited`).
+>
+> **Replay is deliberately NOT shareable.** A position is a pointer into this
+> browser's buffer; serializing it into a share link would hand someone a
+> timestamp their session never observed. The timeline touches no share-link
+> lane — camera, style and layers serialize exactly as before.
+>
+> **Live layers stand down via an optional `setReplaySuppressed(bool)` hook**
+> (flights, military, ais-live-vessels, fire-perimeters). It is a DISPLAY state,
+> not a lifecycle transition: polling, tracking, click handlers, and trails are
+> untouched, no persisted layer state is written, and a layer without the hook
+> keeps drawing live. Do not "simplify" this into `setEnabled(false)` — that
+> would tear down the AIS socket and lose tracking on every scrub.
+>
+> **Render-governor contract:** playback holds the governor (`timeline-replay`)
+> for its duration; a paused seek requests a single frame instead. Per-frame
+> advance is capped at `MAX_FRAME_ADVANCE_MS` (500 ms) so a stall cannot
+> fast-forward the head across minutes in one step.
+>
+> Gates: 74 unit tests under `src/timeline/`, plus
+> `node scripts/qa-timeline.mjs --url <app>` (22 in-app checks) and its
+> `--teeth` negative control, which removes the bar and requires every
+> bar-dependent section to go red.
+
+> **2026-08-30 — two keyless sources.** NASA GIBS imagery
+> (`src/gibsImagery.js`) joins `MAP_STACKS` as `gibs-truecolor` and
+> `gibs-geocolor` rather than becoming a data layer: Cesium imagery draws on
+> the globe, and the app hides the globe whenever Google 3D tiles are active,
+> so an "overlay" would silently render nothing over photoreal. Adding a stack
+> requires four edits — `MAP_STACKS`, `PRESENTED_MAP_STACK_IDS`,
+> `CABLE_GLOBE_STACK_IDS` in telegeographySubmarineCables.js, and the tray QA
+> expectation — and each has a test that fails loudly if you miss it.
+>
+> **The voice tool schema was deliberately NOT edited.** Adding these ids to
+> `set_map_stack`'s enum would change `GEV_REALTIME_TOOLS`, which is frozen by
+> a byte-length + sha256 pin to keep the Realtime session config from
+> cache-busting. Both stacks are reachable by UI; the enum is a one-line change
+> when that pin is next revisited.
+>
+> Fire perimeters (`src/data/firePerimeters.js`, `/api/fire-perimeters`) render
+> the mapped burn edge, not hotspots. Normalization is shared by the proxy and
+> the layer (`firePerimetersShape.js`) and is alias-tolerant on purpose: WFIGS
+> attribute names carry source-dependent prefixes that have drifted across
+> service revisions, so the proxy requests all attributes and the mapping
+> accepts any known spelling, degrading to "unknown" rather than guessing.
+
 
 > **2026-08-23 — first-run mission launcher** (`src/firstRunExperience.js`,
 > `#first-run-launcher`, styles at the tail of `style.css`). After startup

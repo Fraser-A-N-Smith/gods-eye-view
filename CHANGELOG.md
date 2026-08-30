@@ -3,6 +3,48 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30
+
+### Added
+
+- Added a rolling history buffer and timeline scrubber (`T`): rewind, play,
+  step, and loop the last 30 minutes of the live globe, and export the buffered
+  window as JSON. The buffer records only what the session already fetched for
+  the layers that were switched on, so rewinding issues no upstream request and
+  costs nothing at any provider.
+- Added NASA GIBS satellite imagery as two keyless map sources: **Earth Today**
+  (VIIRS global daily mosaic) and **GOES GeoColor** (geostationary, ~10 minute
+  cadence). Each names its own coverage, because a global mosaic stitched from
+  swaths hours apart and a ten-minute view of one hemisphere are different
+  pictures of Earth.
+- Added a **Fire Perimeters** layer (NIFC / WFIGS): the mapped edge of what has
+  burned, complementing the FIRMS hotspot detections already carried.
+- Added cross-platform developer entry points so the repository works on
+  Windows: `npm run dev:secure` and `npm run opensky:import` are now Node
+  scripts rather than bash, and `.gitattributes` pins shell scripts to LF.
+
+### Changed
+
+- Timeline replay asks the flights, military, vessel and fire-perimeter layers
+  to stand down while a past frame is on screen, so the present and the past are
+  never drawn on top of each other. Suppression is a display state only —
+  polling, tracking, click handlers and trails are untouched.
+- Key resolution in the cross-platform launcher prefers an explicit environment
+  variable over the macOS Keychain. `dev-secure.sh` preferred the Keychain,
+  which silently ignored a key the operator had just exported.
+- The unit runner now also discovers tests under `scripts/`.
+
+### Fixed
+
+- A wildfire perimeter with an unreadable size now reports "size unknown"
+  instead of "0 acres" — `Number(null)` is `0`, and the two are different facts.
+- The credential importer no longer writes `.env` one directory above the
+  repository, and now tightens an existing `.env` to mode 0600 (the mode option
+  on `writeFileSync` applies only when it creates the file).
+- The QA matrix runner tears its harness process tree down on Windows, where
+  process groups do not exist; it previously left orphaned Chromium instances
+  running for the rest of the fleet.
+
 ## [Unreleased] — 2026-08-24
 
 ### Added
