@@ -2,6 +2,34 @@
 
 Updated: August 30, 2026
 
+> **2026-08-30 — raster overlays** (`src/data/rasterOverlays.js`). OpenSeaMap
+> sea marks and OpenSnowMap pistes, as independently toggleable
+> `Cesium.ImageryLayer`s on the globe surface.
+>
+> **They are APPENDED to `viewer.imageryLayers`, never inserted at index 0.**
+> MapStackController adds the BASE imagery at index 0 on every stack switch, so
+> anything appended composites above it and stays above it across switches.
+> Inserting an overlay at 0 would put it under the basemap. Verified in-browser
+> across an osm → gibs switch.
+>
+> **On is not the same as visible, and the chip must not conflate them.** These
+> draw on the Cesium globe, which is hidden while Google 3D tiles are active —
+> the default stack. Each layer watches `gev:map-stack-changed`, reads
+> `viewer.scene.globe.show` from live scene state (not the stack id, which can
+> disagree mid-switch), and reports `HIDDEN ON GOOGLE 3D` when the toggle is on
+> with nothing on screen. `getStats().status` is `'zoom-in'` for that case —
+> the manager's reducer treats it as a guidance state, not a feed fault,
+> because a hidden overlay is not a broken one.
+>
+> **No `setReplaySuppressed` hook, deliberately.** These are cartography, not
+> observations: a lighthouse was in the same place four minutes ago. Hiding
+> them during timeline replay would remove context without removing any false
+> claim. A unit test pins their absence so the hook is not added by reflex.
+>
+> **Zoom is bounded on both.** Neither source renders across the whole range,
+> and both run on volunteer infrastructure with no CDN; requesting the empty
+> ends is a 404 storm against a hobby server.
+
 > **2026-08-30 — five new sources.** GDELT global reporting, NOAA NWS alerts,
 > NOAA NHC tropical cyclones, NOAA SWPC space weather, Global Fishing Watch
 > vessel events, plus Copernicus Sentinel map stacks. Contracts that are easy

@@ -11,6 +11,7 @@ import spaceWeatherLayer from './data/spaceWeather.js';
 import weatherAlertsLayer from './data/weatherAlerts.js';
 import tropicalCyclonesLayer from './data/tropicalCyclones.js';
 import vesselEventsLayer from './data/vesselEvents.js';
+import rasterOverlayLayers from './data/rasterOverlays.js';
 import satellitesLayer from './data/satellites.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
 import trafficLayer from './data/traffic.js';
@@ -243,6 +244,13 @@ async function init() {
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
     dataManager.register(vesselEventsLayer);
+    // OpenSeaMap sea marks and OpenSnowMap pistes — transparent raster
+    // overlays composited onto the Cesium globe, independently toggleable.
+    // They render only on a globe-imagery stack; each layer reports that
+    // itself rather than silently drawing nothing under Google 3D.
+    for (const overlay of rasterOverlayLayers) {
+      dataManager.register(overlay);
+    }
     dataManager.register(satellitesLayer);
     dataManager.register(rocketLaunchesLayer);
     rocketLaunchesLayer.attachDataManager(dataManager);

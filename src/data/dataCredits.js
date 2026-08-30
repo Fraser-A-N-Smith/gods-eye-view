@@ -169,6 +169,20 @@ export const DATA_CREDITS = [
       'part of NASA’s Earth Observing System Data and Information System (EOSDIS)',
   },
   {
+    key: 'openseamap',
+    html:
+      'Sea marks (buoys, beacons, lighthouses, harbours): ' +
+      '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a> ' +
+      'contributors (ODbL 1.0)',
+  },
+  {
+    key: 'opensnowmap',
+    html:
+      'Ski pistes, lifts and nordic trails: ' +
+      '<a href="https://www.opensnowmap.org" target="_blank" rel="noopener">OpenSnowMap.org</a> ' +
+      '&amp; © OpenStreetMap contributors (ODbL 1.0)',
+  },
+  {
     key: 'noaa-nws',
     html:
       'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +

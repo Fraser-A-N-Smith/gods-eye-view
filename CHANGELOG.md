@@ -3,6 +3,23 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (c)
+
+### Added
+
+- Added two independently toggleable open-data raster overlays, drawn as
+  `Cesium.ImageryLayer`s on the globe surface: **Sea Marks** (OpenSeaMap —
+  buoys, beacons, lighthouses, harbours) and **Ski Pistes** (OpenSnowMap —
+  pistes, lifts, nordic trails). Both keyless and ODbL.
+- Each overlay reports when it is switched on but not on screen. They draw on
+  the Cesium globe, which the app hides whenever Google Photorealistic 3D Tiles
+  are active — and photoreal is the default — so the layer row reads
+  `HIDDEN ON GOOGLE 3D · SWITCH MAP SOURCE TO SEE THIS` rather than showing a
+  lit toggle over an empty globe. Switching to OSM, Bing, GIBS or Sentinel
+  reveals it with no reload.
+- Both overlays cap their zoom range to what each source actually renders, so
+  panning cannot turn into a 404 storm against a volunteer-run tile server.
+
 ## [Unreleased] — 2026-08-30 (b)
 
 ### Added

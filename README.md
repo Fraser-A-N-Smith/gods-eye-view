@@ -181,7 +181,7 @@ Twenty-eight tools, four jobs — the commands below come straight from the prod
 
 ## 🛰️ What's on the Globe
 
-Nineteen live layers. **Fifteen of them need nothing at all** — no key, no account, no signup.
+Twenty-one live layers. **Seventeen of them need nothing at all** — no key, no account, no signup.
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
@@ -203,9 +203,11 @@ Nineteen live layers. **Fifteen of them need nothing at all** — no key, no acc
 | 🌌 **Space Weather** | The auroral oval and planetary K-index — and what a storm means for the radio, satellite and GNSS layers | NOAA SWPC | 🟢 |
 | 🔥 **Fire Perimeters** | The mapped burn edge, not just the hotspot — with containment | NIFC / WFIGS | 🟢 |
 | 🛰️ **Vessel Events** | AIS **gaps**, encounters, loitering and port visits — the ships that went quiet. ⚠️ non-commercial licence | Global Fishing Watch | 🟡 |
+| ⚓ **Sea Marks** | Buoys, beacons, lighthouses and harbours as a transparent overlay on the globe | OpenSeaMap | 🟢 |
+| ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
 
-**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
+**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The two raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
 
 **Missing a layer you want?** Open an issue — or add it and send the PR.
 

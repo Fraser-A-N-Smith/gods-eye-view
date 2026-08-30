@@ -43,6 +43,8 @@ How to read this:
 | **NOAA Space Weather Prediction Center** | OVATION aurora forecast grid and planetary K-index | US public domain | "NOAA / NWS Space Weather Prediction Center" |
 | **Copernicus Data Space (Sentinel Hub)** | Sentinel-1 SAR and Sentinel-2 optical imagery basemaps (optional, BYO credentials) | [Copernicus data policy](https://dataspace.copernicus.eu) — free and open, including commercial use; attribution required | "Contains modified Copernicus Sentinel data — ESA" |
 | **Global Fishing Watch** ⚠️ | Vessel events — AIS gaps, encounters, loitering, port visits (optional, BYO token) | **CC BY-NC 4.0 — NonCommercial.** See the warning below | "Global Fishing Watch" + link |
+| **OpenSeaMap** | Sea-mark raster overlay — buoys, beacons, lighthouses, harbours | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSeaMap contributors" |
+| **OpenSnowMap** | Ski piste raster overlay — pistes, lifts, nordic trails | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSnowMap.org, © OpenStreetMap contributors" |
 | **NIFC / WFIGS** | Mapped wildfire perimeters (US interagency coverage) | US public domain (interagency wildland fire data) | "NIFC / WFIGS Interagency Wildland Fire Perimeters" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 
