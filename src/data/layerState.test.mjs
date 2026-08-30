@@ -153,10 +153,23 @@ function encode(state) {
   return params.toString();
 }
 
+/**
+ * A single-character layer token that no registered layer uses.
+ *
+ * Tests that need "an unknown token" must not hardcode a letter: the letter
+ * gets registered later and the assertion quietly stops testing anything.
+ */
+function unregisteredToken() {
+  const used = new Set(LAYER_STATE_REGISTRY.map((entry) => entry.token));
+  const free = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('').find((c) => !used.has(c));
+  if (!free) throw new Error('no unregistered layer token remains for this test');
+  return free;
+}
+
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  assert.equal(REGISTERED_LAYER_IDS.length, 16);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 16);
+  assert.equal(REGISTERED_LAYER_IDS.length, 26);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 26);
   assert.deepEqual(REGISTERED_LAYER_IDS, [...REGISTERED_LAYER_IDS].sort());
   assert.throws(
     () => validateLayerStateRegistry([...LAYER_STATE_REGISTRY, LAYER_STATE_REGISTRY[0]]),
@@ -223,8 +236,12 @@ test('v2 codec distinguishes absent from empty and keeps canonical deterministic
 });
 
 test('unknown enabled-layer tokens reject the payload instead of becoming an empty set', () => {
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=z')), null);
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.z')), null);
+  // Derived rather than hardcoded: this test needs a token no layer owns, and
+  // every literal chosen for that role eventually gets registered by someone
+  // adding a layer — which silently turns this into a test of nothing.
+  const unknown = unregisteredToken();
+  assert.equal(decodeLayerStateParams(new URLSearchParams(`v=2&l=${unknown}`)), null);
+  assert.equal(decodeLayerStateParams(new URLSearchParams(`v=2&l=c.${unknown}`)), null);
 });
 
 test('unknown and forbidden option fields are ignored while missing options use codec defaults', () => {

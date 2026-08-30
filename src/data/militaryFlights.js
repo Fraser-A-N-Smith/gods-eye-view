@@ -2747,6 +2747,24 @@ const militaryFlightsLayer = {
     }
   },
 
+  /**
+   * Hide or restore this layer's live rendering while the timeline scrubber
+   * replays a past frame (src/timeline/). Optional hook: the timeline calls it
+   * only when present, and a layer without it simply keeps drawing live.
+   *
+   * Deliberately NOT `disable()`. Suppression is a display state, not a
+   * lifecycle transition: polling, tracking, click handlers and the trail all
+   * stay exactly as they were, so returning to live is instant and the layer
+   * never loses its place. Nothing here touches persisted layer state.
+   *
+   * @param {boolean} suppressed True while a replay frame owns the globe.
+   */
+  setReplaySuppressed(suppressed) {
+    const show = !suppressed;
+    if (_billboardCollection) _billboardCollection.show = show;
+    if (_modelCollection) _modelCollection.show = show;
+  },
+
   /** @deprecated Compatibility alias for {@link enable}. */
   show(viewer) {
     this.enable(viewer);

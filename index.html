@@ -882,6 +882,52 @@
     <p class="first-run-note" data-first-run-status role="status" aria-live="polite">Tip: the GEV MIC button in the dock lets you talk to the map.</p>
   </aside>
 
+  <!-- Timeline scrubber — rewind the rolling in-memory history buffer.
+       Hidden until toggled (T). Everything it replays was already fetched for
+       the live layers, so opening it costs nothing upstream. -->
+  <section id="timeline-bar" class="timeline-bar" aria-label="Timeline scrubber" hidden>
+    <div class="timeline-row">
+      <div class="timeline-status">
+        <span id="timeline-mode" class="timeline-mode" data-mode="live" aria-live="polite">LIVE</span>
+        <time id="timeline-clock" class="timeline-clock">--:--:--Z</time>
+      </div>
+      <div class="timeline-transport" role="group" aria-label="Replay transport">
+        <button id="timeline-step-back" type="button" class="timeline-btn" aria-label="Step back ten seconds" title="Back 10s">&#9666;&#9666;</button>
+        <button id="timeline-play" type="button" class="timeline-btn timeline-btn-primary" aria-label="Play replay" aria-pressed="false" title="Play / pause">&#9654;</button>
+        <button id="timeline-step-forward" type="button" class="timeline-btn" aria-label="Step forward ten seconds" title="Forward 10s">&#9656;&#9656;</button>
+      </div>
+      <input
+        id="timeline-scrub"
+        class="timeline-scrub gev-quantitative-slider"
+        type="range"
+        min="0"
+        max="1000"
+        value="1000"
+        step="1"
+        aria-label="Scrub buffered history"
+      />
+      <div class="timeline-actions">
+        <label class="timeline-rate-label" for="timeline-rate">RATE</label>
+        <select id="timeline-rate" class="pp-select timeline-rate" aria-label="Playback rate">
+          <option value="0.25">0.25&times;</option>
+          <option value="0.5">0.5&times;</option>
+          <option value="1" selected>1&times;</option>
+          <option value="2">2&times;</option>
+          <option value="4">4&times;</option>
+          <option value="8">8&times;</option>
+        </select>
+        <button id="timeline-loop" type="button" class="timeline-btn" aria-label="Loop the buffered window" aria-pressed="false" title="Loop window">LOOP</button>
+        <button id="timeline-live" type="button" class="timeline-btn active" aria-label="Return to live" aria-pressed="true" title="Return to live">LIVE</button>
+        <button id="timeline-export" type="button" class="timeline-btn" aria-label="Export the buffered window as JSON" title="Export buffered window (JSON)">EXPORT</button>
+      </div>
+    </div>
+    <div class="timeline-row timeline-row-meta">
+      <span id="timeline-detail" class="timeline-detail">NO HISTORY BUFFERED YET</span>
+      <div id="timeline-coverage" class="timeline-coverage" aria-label="Per-layer buffered coverage"></div>
+    </div>
+    <p id="timeline-caveat" class="timeline-caveat" role="status" aria-live="polite" hidden></p>
+  </section>
+
   <!-- Intelligence HUD Overlay -->
   <div id="intel-hud"></div>
 

@@ -69,7 +69,7 @@ The live layers are grounded in public feeds: the airliner crossing your screen 
 
 Requires Node.js 24.14.x or 26.x (enforced by `package.json`).
 
-1. Copy `.env.example` → `.env` and set `GOOGLE_MAPS_API_KEY`.
+1. Copy `.env.example` → `.env` and set `GOOGLE_MAPS_API_KEY`. (The app now starts without it — you get the keyless OSM globe instead of the photorealistic one — but the photoreal planet is most of the point, so set it if you can.)
 2. Install and run:
 
 ```bash
@@ -92,11 +92,15 @@ npm run dev -- --host localhost --port 4173
 > that could cost money.
 > ```
 
-**That one key is the whole entry fee.** Everything in this README is color-coded — 🟢 needs nothing · 🟡 free key · 🔴 metered — and Google Maps is the only 🔴 you need: it buys the photorealistic planet, and most of the globe lights up 🟢 from there. For typical solo exploring, expect **$0 on most layers** and pocket change on the metered two: Google currently gives **1,000 free 3D-tile sessions a month** — each good for up to three hours of rendering, which is very hard for one person to exhaust — and voice carries a built-in $5 session cap. Full map in [Keys & Costs](#-api-keys), full honest breakdown in [What it actually costs](#-what-it-actually-costs).
+**That one key is the whole entry fee.** Everything in this README is color-coded — 🟢 needs nothing · 🟡 free key · 🔴 metered — and Google Maps is the only 🔴 you need: it buys the photorealistic planet, and most of the globe lights up 🟢 from there. It is not required to *launch* — without it the app opens on the keyless OSM globe, and a Cesium ion token reaches the same photoreal tiles through ion's mirror — but it is what you want for the experience the screenshots show. For typical solo exploring, expect **$0 on most layers** and pocket change on the metered two: Google currently gives **1,000 free 3D-tile sessions a month** — each good for up to three hours of rendering, which is very hard for one person to exhaust — and voice carries a built-in $5 session cap. Full map in [Keys & Costs](#-api-keys), full honest breakdown in [What it actually costs](#-what-it-actually-costs).
 
 The dev server binds to **localhost** — your keys stay on your machine. Sharing on a LAN safely is covered in [Sharing an instance](#-sharing-an-instance) and [SECURITY.md](SECURITY.md).
 
+**Docker:** `docker compose up --build`, then open **`http://localhost:4173`**. Put your keys in `.env` first — Compose passes them in at runtime and they are never baked into the image. The container publishes to **127.0.0.1 only**, matching the app's own default; sharing on a LAN is an explicit opt-in (`GEV_BIND_ADDR=0.0.0.0 docker compose up`) and you should read [SECURITY.md](SECURITY.md) before you do. It runs the dev server on purpose: a static build has none of the API proxies. No keys at all still works — you get the OSM globe.
+
 **macOS shortcut:** `./scripts/dev-fresh.sh` clears the Vite cache and pulls your keys straight from the Keychain.
+
+**Windows / Linux:** everything above works as written — `npm install`, `npm run dev`, `npm test`, and `npm run build` are plain Node and need no shell. On Windows, use `copy .env.example .env` (cmd) or `Copy-Item .env.example .env` (PowerShell) for step 1. `npm run dev:secure` is the cross-platform launcher: it finds your keys in the environment, the Keychain (macOS only), or `.env`, tells you which source each came from, and starts the server. The `.sh` scripts remain macOS/Linux-only and nothing needs them.
 
 ---
 
@@ -179,11 +183,11 @@ Twenty-eight tools, four jobs — the commands below come straight from the prod
 
 ## 🛰️ What's on the Globe
 
-Thirteen live layers. **Ten of them need nothing at all** — no key, no account, no signup.
+Twenty-three live layers. **Nineteen of them need nothing at all** — no key, no account, no signup.
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
-| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM | Google / Ion / OSM | 🔴 Google (required) · 🟡 ion for Bing · 🟢 OSM |
+| 🗺️ **Map Stack** | Google Photorealistic 3D, Bing aerial, OSM, NASA GIBS (today's satellite mosaic + GOES GeoColor), Copernicus Sentinel-1 SAR & Sentinel-2 | Google / Ion / OSM / NASA / ESA | 🔴 Google *or* 🟡 ion for photoreal · 🟡 ion for Bing · 🟢 OSM & GIBS · 🟡 Copernicus |
 | ✈️ **Live Flights** | Thousands of live aircraft + route history | OpenSky + adsb.lol | 🟢 (🟡 optional for more polling credits) |
 | 🎖️ **Military Flights** | ADS-B military traffic in amber | adsb.lol | 🟢 |
 | 🚢 **Live Vessels** | Thousands of ships worldwide | AISStream | 🟡 |
@@ -195,9 +199,19 @@ Thirteen live layers. **Ten of them need nothing at all** — no key, no account
 | 🚲 **Bikeshare** | Live station availability | GBFS | 🟢 |
 | 🔥 **Active Fires** | Live NASA FIRMS detections, trailing 24h | NASA FIRMS | 🟡 |
 | 🚀 **Space Missions** | Rolling 30-day launches with payload, stage, and recovery detail | Launch Library 2 | 🟢 (🟡 optional token raises the allowance) |
+| 📰 **Global Reporting** | Where the world is being written about — protests, conflict and disasters geocoded from worldwide coverage in 65 languages, trailing 24h. Themes only, never free-text search | GDELT | 🟢 |
+| ⚠️ **Weather Alerts** | Every US watch, warning and advisory in force, as issued | NOAA NWS | 🟢 |
+| 🌀 **Tropical Cyclones** | Active storms at their latest advisory position, by Saffir–Simpson category | NOAA NHC | 🟢 |
+| 🌌 **Space Weather** | The auroral oval and planetary K-index — and what a storm means for the radio, satellite and GNSS layers | NOAA SWPC | 🟢 |
+| 🔥 **Fire Perimeters** | The mapped burn edge, not just the hotspot — with containment | NIFC / WFIGS | 🟢 |
+| 🛰️ **Vessel Events** | AIS **gaps**, encounters, loitering and port visits — the ships that went quiet. ⚠️ non-commercial licence | Global Fishing Watch | 🟡 |
+| 🌧️ **Weather Radar** | Live precipitation reflectivity as a semi-transparent globe overlay, refreshed on RainViewer's ~10 min cadence. Blank means no radar there, not no rain | RainViewer | 🟢 |
+| 🛰️ **IR Satellite** | Near-global infrared cloud cover — cloud-top temperature, not rainfall | RainViewer | 🟢 |
+| ⚓ **Sea Marks** | Buoys, beacons, lighthouses and harbours as a transparent overlay on the globe | OpenSeaMap | 🟢 |
+| ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
 
-**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
+**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The two raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
 
 **Missing a layer you want?** Open an issue — or add it and send the PR.
 
@@ -287,13 +301,22 @@ Five keys cover the fully keyed experience. Three currently offer no-cost develo
 
 | | Key | Why | Get it |
 |---|-----|-----|--------|
-| 🔴 | **Google Maps** *(required)* | The photorealistic 3D planet ([Map Tiles API](https://developers.google.com/maps/documentation/tile)) | [Google Cloud Console](https://console.cloud.google.com/) — metered; [check current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and URL-restrict it |
+| 🔴 | **Google Maps** *(strongly recommended)* | The photorealistic 3D planet ([Map Tiles API](https://developers.google.com/maps/documentation/tile)), plus place search and geocoding | [Google Cloud Console](https://console.cloud.google.com/) — metered; [check current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and URL-restrict it. Not needed to launch: without it you get the OSM globe, and a Cesium ion token reaches the same photoreal tiles |
 | 🔴 | **OpenAI** | 🎙️ The voice experience + AI HUD summary. Want another provider behind the mic? PRs welcome | [platform.openai.com](https://platform.openai.com) — metered; [check current API pricing](https://openai.com/api/pricing/) |
 | 🟡 | **AISStream** | 🚢 Live global ships | [aisstream.io](https://aisstream.io) — free, seriously, it's a two-minute signup |
 | 🟡 | **NASA FIRMS** | 🔥 Live active fires | [firms.modaps.eosdis.nasa.gov](https://firms.modaps.eosdis.nasa.gov/api/map_key/) — free |
 | 🟡 | **TomTom** | 🚦 Real traffic instead of an approximate simulation | [developer.tomtom.com](https://developer.tomtom.com) — check the current developer allowance for your account |
 
 *What the TomTom key buys you: step 5 of [The First Five Minutes](#-the-first-five-minutes) for real — actual rush-hour density painted on the city instead of an approximate simulation.*
+
+> [!TIP]
+> **Photoreal not loading? In the EEA?** Google Maps Platform accounts billed in
+> the European Economic Area can be refused by the Map Tiles API with a **401**
+> even when the key is valid and billing is live. Set a **`CESIUM_ION_TOKEN`**
+> and the app will reach the *same* Google tiles through Cesium ion's mirror
+> (asset 2275207) automatically — it tries Google direct first, falls back to
+> ion, and only then drops to the OSM globe. The startup log names which route
+> it took and why.
 
 ### Cherry on top
 
@@ -312,7 +335,7 @@ OPENAI_API_KEY="…" AISSTREAM_API_KEY="…" npm run dev -- --host localhost --p
 
 On macOS you can also keep any key in the Keychain and `./scripts/dev-fresh.sh` pulls them in — the `security add-generic-password` service names are documented in `.env.example`.
 
-OpenSky can run fully anonymous (`OPENSKY_AUTH_MODE=anon`), or import OAuth credentials with `./scripts/opensky-import-client.sh /path/to/credentials.json`.
+OpenSky can run fully anonymous (`OPENSKY_AUTH_MODE=anon`), or import OAuth credentials with `npm run opensky:import -- /path/to/credentials.json` (works everywhere: the Keychain on macOS, `.env` elsewhere).
 
 ### 💸 What it actually costs
 

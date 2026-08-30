@@ -1,6 +1,227 @@
 # God's Eye View Current State
 
-Updated: August 24, 2026
+Updated: August 30, 2026
+
+> **2026-08-30 — photoreal source chain** (`src/photorealTileset.js`).
+> Startup no longer throws without a Google Maps key.
+>
+> **An unavailable basemap must never take the app down.** `main.js` used to
+> hard-throw before the viewer was constructed (#64), so no key meant no app —
+> not even the keyless OSM globe the map stack already supported.
+> `loadPhotorealTileset()` never throws: exhausting the chain returns
+> `{tileset: null}` and the app opens on OSM.
+>
+> **The chain is Google direct → Cesium ion mirror → none.** ion asset
+> **2275207** is ion's published mirror of the same Google tileset, served
+> under ion's own entitlement, which is why it works for EEA-billed accounts
+> that the Map Tiles API 401s directly (#59). Google is still preferred when
+> available: same imagery, one less intermediary.
+>
+> **Skipped is not failed.** A source with no credential is recorded as
+> `skipped` with the env var that would have enabled it; a source that was
+> tried and refused is `failed` with the upstream message. The loader line, the
+> console, and the map-source tray all keep that distinction, because "you have
+> no key" and "your key was rejected" need different actions from the operator.
+>
+> **The Google key is optional everywhere else too.** `locations.js`,
+> `annotationResolver.js` and `gevActions.js` already guarded
+> `window.__GOOGLE_MAPS_API_KEY__`; main.js now only sets it when present, so
+> place search and geocoding degrade rather than the app failing.
+
+> **2026-08-30 — RainViewer radar + IR satellite**
+> (`src/data/rainviewerOverlays.js`, `rainviewerFrames.js`). Two independently
+> toggleable semi-transparent globe imagery overlays, browser-direct — the
+> source is keyless and CORS-open, so there is no proxy and nothing
+> server-side to configure.
+>
+> **A same-frame poll must not touch the scene.** RainViewer publishes about
+> every ten minutes and the layer polls on that cadence, so most polls return
+> the frame already displayed. `update()` compares the frame timestamp FIRST
+> and returns early; rebuilding the imagery layer for an identical frame throws
+> away a warm tile cache, re-requests every visible tile and flickers.
+> `getFrameState().unchangedPolls` counts the no-ops, and a unit test plus the
+> in-browser check both assert the imagery is untouched across repeat polls.
+>
+> **A new frame is added BEFORE the old is removed.** Remove-then-add would
+> flash the basemap through. Verified in-browser: the layer count is net-zero
+> across a swap and the URL advances.
+>
+> **One frame request serves both overlays.** `weather-maps.json` carries both
+> frame lists, so the layers share a module-level coalesced cache — two layers
+> polling in the same tick share one in-flight request. `invalidateFrameCache()`
+> on either layer drops it for both; without that seam nothing could force a
+> refresh inside the TTL.
+>
+> **Observed frames only.** `radar.past`, never `radar.nowcast` — the nowcast
+> is a forecast and would render identically to an observation.
+>
+> **Radar coverage is not global and the row says so.** Blank means no radar
+> network there, which is the opposite of "no rain there". The satellite row
+> separately states that IR is cloud-top temperature, not rainfall, because the
+> two overlays look similar and do not mean the same thing.
+>
+> Same globe-visibility rule as the other surface overlays: hidden under Google
+> 3D, reported as guidance (`status: 'zoom-in'`), revealed by a stack switch
+> with no reload.
+
+> **2026-08-30 — raster overlays** (`src/data/rasterOverlays.js`). OpenSeaMap
+> sea marks and OpenSnowMap pistes, as independently toggleable
+> `Cesium.ImageryLayer`s on the globe surface.
+>
+> **They are APPENDED to `viewer.imageryLayers`, never inserted at index 0.**
+> MapStackController adds the BASE imagery at index 0 on every stack switch, so
+> anything appended composites above it and stays above it across switches.
+> Inserting an overlay at 0 would put it under the basemap. Verified in-browser
+> across an osm → gibs switch.
+>
+> **On is not the same as visible, and the chip must not conflate them.** These
+> draw on the Cesium globe, which is hidden while Google 3D tiles are active —
+> the default stack. Each layer watches `gev:map-stack-changed`, reads
+> `viewer.scene.globe.show` from live scene state (not the stack id, which can
+> disagree mid-switch), and reports `HIDDEN ON GOOGLE 3D` when the toggle is on
+> with nothing on screen. `getStats().status` is `'zoom-in'` for that case —
+> the manager's reducer treats it as a guidance state, not a feed fault,
+> because a hidden overlay is not a broken one.
+>
+> **No `setReplaySuppressed` hook, deliberately.** These are cartography, not
+> observations: a lighthouse was in the same place four minutes ago. Hiding
+> them during timeline replay would remove context without removing any false
+> claim. A unit test pins their absence so the hook is not added by reflex.
+>
+> **Zoom is bounded on both.** Neither source renders across the whole range,
+> and both run on volunteer infrastructure with no CDN; requesting the empty
+> ends is a 404 storm against a hobby server.
+
+> **2026-08-30 — five new sources.** GDELT global reporting, NOAA NWS alerts,
+> NOAA NHC tropical cyclones, NOAA SWPC space weather, Global Fishing Watch
+> vessel events, plus Copernicus Sentinel map stacks. Contracts that are easy
+> to break by "simplifying":
+>
+> **The GDELT and GFW query surfaces are CLOSED ALLOWLISTS, enforced in the
+> proxy.** The client sends a preset id; the proxy resolves it to a GKG theme
+> operator or a GFW dataset id. There is deliberately NO code path that
+> forwards caller text upstream. GDELT's GEO API will happily geocode a
+> person's name, and the refusal lives in the proxy rather than the UI so it
+> holds for anything that can reach the port. Unit tests assert that raw
+> queries and raw dataset strings are refused at both layers.
+>
+> **Mentions are not events.** GDELT counts how often a place appeared in
+> matching coverage. The field is named `mentions`, the status line says
+> "PLACES MENTIONED · NOT AN EVENT COUNT", and an empty region means nobody
+> wrote about it — never that nothing happened. Do not rename this to `count`
+> or `events`.
+>
+> **NWS zone-only alerts must never be silently dropped.** A large share of
+> alerts carry `geometry: null` (issued against forecast zones). They are kept,
+> counted, and reported as "N DRAWN · M ZONE-ONLY", because a map showing only
+> the drawable ones reads as an all-clear over places under a warning.
+> `getZoneOnlyAlerts()` exists so a UI can list what the map omits.
+>
+> **Every GFW record carries its hedge.** The caveat string lives on the preset
+> and is copied onto each record by the shape module, so no render path can
+> drop it. An AIS gap may be a disabled transponder OR a satellite coverage
+> hole, and the caveat names both.
+>
+> **The aurora oval is a FORECAST.** OVATION predicts 30–90 minutes ahead from
+> solar wind at L1. Every status string is asserted to contain "FORECAST", and
+> `getConditions().forecast` is hardcoded true so the HUD and voice cannot drop
+> it. A missing Kp reads UNKNOWN, never QUIET.
+>
+> **Copernicus fails closed.** The stacks declare `requiresRuntimeProbe` and
+> are unavailable until `/api/copernicus/status` confirms the server holds
+> credentials; main.js probes at boot. Showing them as available and serving a
+> black globe is the worse error. Tiles go through `/api/copernicus/tiles/...`
+> because the OAuth token must never reach the browser, and the proxy uses WMS
+> with a computed bbox rather than WMTS so it does not depend on per-instance
+> tile-matrix names (`src/data/tileMath.js`).
+>
+> **`Number()` is banned on external feed values.** Use
+> `src/data/numeric.js` (`finiteOrNull`, `textOrNull`, `clampedOrNull`).
+> `Number(null)`, `Number('')` and `Number(false)` are all 0, which converts
+> "the feed did not say" into "the feed said none". That bug shipped three
+> times — wildfire acreage, planetary K-index, and a blank Kp row — before the
+> helper existed.
+>
+> **Adding a map stack is four edits**, each with a test that fails loudly if
+> missed: `MAP_STACKS`, `PRESENTED_MAP_STACK_IDS`, `CABLE_GLOBE_STACK_IDS` in
+> telegeographySubmarineCables.js, and the tray QA expectation.
+>
+> **The voice tool schema remains untouched** and still matches its sha256 pin.
+> None of these layers is reachable by voice yet; that is a deliberate deferral,
+> not an oversight.
+
+
+> **2026-08-30 — timeline scrubber** (`src/timeline/`, `#timeline-bar`, styles
+> at the tail of `style.css`, toggled with `T`). A rolling in-memory buffer of
+> observed entity positions, plus transport controls to scrub it.
+>
+> **It records only what was already fetched.** `TimelineRecorder` reads each
+> layer's existing `getAnalystRecords()` snapshot — the same seam the voice
+> analyst uses — on a 15 s cadence. It never calls `update()` and never issues
+> a request, which is the whole reason rewind can be keyless and free. A unit
+> test pins that: recording a layer whose `update`/`enable` are instrumented
+> must leave those counters at zero.
+>
+> **Three refusals are structural, not cosmetic.** (1) `sampleAt()` outside the
+> recorded range returns `null` rather than clamping to the nearest edge frame
+> — a clamped edge would present the oldest retained frame as the state at a
+> time nobody observed. (2) Interpolation stops at `maxInterpolationGapMs`
+> (25 s): a real feed outage stays a visible hole instead of a smooth glide
+> across minutes nobody watched. (3) The status line distinguishes
+> `OBSERVED FIX` / `INTERPOLATED` / `HELD LAST FIX`, and per-source coverage
+> chips report each layer's OWN observed span, which is routinely shorter than
+> the buffer's — a layer switched on two minutes ago has two minutes of past.
+>
+> **Memory is bounded by a sample budget, not by frames or minutes.** Neither
+> of those bounds anything on its own: the same 30-minute window holds a
+> handful of vessels over open ocean and thousands of aircraft over Europe.
+> `maxTotalSamples` (250k, ~25 MB) is the real guard, and when the budget
+> rather than the window sets the floor the bar says so (`budgetLimited`).
+>
+> **Replay is deliberately NOT shareable.** A position is a pointer into this
+> browser's buffer; serializing it into a share link would hand someone a
+> timestamp their session never observed. The timeline touches no share-link
+> lane — camera, style and layers serialize exactly as before.
+>
+> **Live layers stand down via an optional `setReplaySuppressed(bool)` hook**
+> (flights, military, ais-live-vessels, fire-perimeters). It is a DISPLAY state,
+> not a lifecycle transition: polling, tracking, click handlers, and trails are
+> untouched, no persisted layer state is written, and a layer without the hook
+> keeps drawing live. Do not "simplify" this into `setEnabled(false)` — that
+> would tear down the AIS socket and lose tracking on every scrub.
+>
+> **Render-governor contract:** playback holds the governor (`timeline-replay`)
+> for its duration; a paused seek requests a single frame instead. Per-frame
+> advance is capped at `MAX_FRAME_ADVANCE_MS` (500 ms) so a stall cannot
+> fast-forward the head across minutes in one step.
+>
+> Gates: 74 unit tests under `src/timeline/`, plus
+> `node scripts/qa-timeline.mjs --url <app>` (22 in-app checks) and its
+> `--teeth` negative control, which removes the bar and requires every
+> bar-dependent section to go red.
+
+> **2026-08-30 — two keyless sources.** NASA GIBS imagery
+> (`src/gibsImagery.js`) joins `MAP_STACKS` as `gibs-truecolor` and
+> `gibs-geocolor` rather than becoming a data layer: Cesium imagery draws on
+> the globe, and the app hides the globe whenever Google 3D tiles are active,
+> so an "overlay" would silently render nothing over photoreal. Adding a stack
+> requires four edits — `MAP_STACKS`, `PRESENTED_MAP_STACK_IDS`,
+> `CABLE_GLOBE_STACK_IDS` in telegeographySubmarineCables.js, and the tray QA
+> expectation — and each has a test that fails loudly if you miss it.
+>
+> **The voice tool schema was deliberately NOT edited.** Adding these ids to
+> `set_map_stack`'s enum would change `GEV_REALTIME_TOOLS`, which is frozen by
+> a byte-length + sha256 pin to keep the Realtime session config from
+> cache-busting. Both stacks are reachable by UI; the enum is a one-line change
+> when that pin is next revisited.
+>
+> Fire perimeters (`src/data/firePerimeters.js`, `/api/fire-perimeters`) render
+> the mapped burn edge, not hotspots. Normalization is shared by the proxy and
+> the layer (`firePerimetersShape.js`) and is alias-tolerant on purpose: WFIGS
+> attribute names carry source-dependent prefixes that have drifted across
+> service revisions, so the proxy requests all attributes and the mapping
+> accepts any known spelling, degrading to "unknown" rather than guessing.
+
 
 > **2026-08-23 — first-run mission launcher** (`src/firstRunExperience.js`,
 > `#first-run-launcher`, styles at the tail of `style.css`). After startup

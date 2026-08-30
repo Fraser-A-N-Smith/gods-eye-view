@@ -1,0 +1,65 @@
+# God's Eye View — `docker compose up --build`, then open http://localhost:4173
+#
+# Runs the Vite dev server in a container. See the Dockerfile for why the dev
+# server rather than a static build (short version: the API proxies live in
+# vite.config.js, and a built client has none of them).
+
+services:
+  gev:
+    build: .
+    image: gods-eye-view:dev
+
+    # PUBLISHED TO LOCALHOST ONLY, matching the app's own default.
+    #
+    # The container binds 0.0.0.0 internally because a container's loopback is
+    # not the host's — binding "localhost" in there would make the server
+    # unreachable through any published port. That is NOT the LAN exposure
+    # SECURITY.md warns about: what decides reachability is the host-side
+    # address below, and it defaults to 127.0.0.1.
+    #
+    # To share on a LAN, opt in explicitly and read SECURITY.md first — a
+    # reachable instance brokers every configured API key to anyone who can hit
+    # the port:
+    #   GEV_BIND_ADDR=0.0.0.0 docker compose up
+    ports:
+      - "${GEV_BIND_ADDR:-127.0.0.1}:${GEV_HOST_PORT:-4173}:4173"
+
+    # Keys are supplied at RUNTIME, never baked into the image (.dockerignore
+    # keeps .env out of the build context entirely). `required: false` means a
+    # keyless run still works — since the photoreal fallback chain landed, the
+    # app starts with no keys at all and opens on the OSM globe.
+    env_file:
+      - path: .env
+        required: false
+
+    # Declared AFTER env_file, which is what makes these win.
+    #
+    # This is load-bearing, not belt-and-braces: .env.example documents a
+    # HOST=localhost line, and a user who uncomments it would otherwise bind
+    # the server to the container's own loopback and get an unreachable app
+    # with no obvious cause. The container's HOST is not the operator's to set;
+    # the published address above is.
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4173"
+
+    # The proxy disk caches — OpenSky's credit ledger, cached TLEs, the TomTom
+    # daily tile budget, GDELT and fire-perimeter responses. Persisting them
+    # across restarts is the difference between resuming and re-spending an
+    # API allowance every `compose up`.
+    volumes:
+      - gev-cache:/app/.gev-cache
+
+    # npm spawns vite as a child process; tini as PID 1 reaps it and forwards
+    # signals, so Ctrl-C and `docker compose down` stop cleanly instead of
+    # timing out after ten seconds.
+    init: true
+
+    # For live editing, uncomment both lines below. The anonymous volume keeps
+    # the image's node_modules rather than shadowing them with the host's,
+    # which are frequently the wrong platform's native binaries:
+    #   - .:/app
+    #   - /app/node_modules
+
+volumes:
+  gev-cache:

@@ -1,0 +1,109 @@
+// Space weather layer. The status line is the product here: it must always say
+// the oval is a FORECAST, must never render a missing index as quiet, and must
+// carry the operational consequence rather than a bare number.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spaceWeatherStatusText, createSpaceWeatherLayer } from './spaceWeather.js';
+
+test('ALWAYS FORECAST: the status never presents the oval as an observation', () => {
+  for (const state of [
+    { kp: 2, count: 500 },
+    { kp: null, count: 500 },
+    { kp: 8, count: 1 },
+  ]) {
+    assert.match(spaceWeatherStatusText(state), /FORECAST/, JSON.stringify(state));
+  }
+});
+
+test('the status carries the operational effect, not just the index', () => {
+  const text = spaceWeatherStatusText({ kp: 7, count: 900 });
+  assert.match(text, /KP 7\.0/);
+  assert.match(text, /G3 STORM/);
+  // "Kp 7" alone is not actionable; the consequence is the point of the layer.
+  assert.match(text, /HF|GNSS|ORBIT/);
+});
+
+test('a missing index reads UNKNOWN, never quiet', () => {
+  const text = spaceWeatherStatusText({ kp: null, count: 200 });
+  assert.match(text, /KP UNKNOWN/);
+  assert.doesNotMatch(text, /QUIET/);
+});
+
+test('an empty oval says there is no forecast, not that there is no aurora', () => {
+  const text = spaceWeatherStatusText({ kp: 1, count: 0 });
+  assert.match(text, /NO AURORA FORECAST/);
+});
+
+test('errors and loading take priority', () => {
+  assert.equal(spaceWeatherStatusText({ error: 'SPACE WEATHER UNAVAILABLE' }), 'SPACE WEATHER UNAVAILABLE');
+  assert.equal(spaceWeatherStatusText({ loading: true }), 'LOADING SPACE WEATHER');
+});
+
+test('getConditions always flags the forecast nature to its callers', () => {
+  const layer = createSpaceWeatherLayer();
+  const conditions = layer.getConditions();
+  assert.equal(conditions.forecast, true, 'the HUD and voice must not be able to drop this');
+  assert.equal(conditions.kp, null);
+  assert.equal(conditions.label, 'UNKNOWN');
+});
+
+test('a disabled layer does not poll', async () => {
+  let fetched = 0;
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => { fetched += 1; return { ok: true, json: async () => ({ aurora: [] }) }; },
+  });
+  await layer.update();
+  assert.equal(fetched, 0);
+});
+
+test('a good response populates conditions and cells', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [{ lon: 10, lat: 70, probability: 80 }, { lon: 11, lat: 70, probability: 40 }],
+        auroraPeak: 80,
+        kp: 6.33,
+        kpAvailable: true,
+        forecastAt: '2026-08-30T13:00:00Z',
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.equal(stats.count, 2);
+  assert.ok(Math.abs(stats.kp - 6.33) < 1e-9);
+  assert.match(stats.status, /G2 STORM/);
+  assert.equal(layer.getConditions().forecastAt, '2026-08-30T13:00:00Z');
+});
+
+test('a missing Kp still draws the oval — the index is optional, the grid is not', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ aurora: [{ lon: 0, lat: 70, probability: 50 }], kpAvailable: false }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  assert.equal(layer.getStats().count, 1);
+  assert.match(layer.getStats().status, /KP UNKNOWN/);
+});
+
+test('HTTP, malformed, and network failures each degrade honestly', async () => {
+  const http = createSpaceWeatherLayer({ fetchImpl: async () => ({ ok: false, status: 500 }) });
+  http.enable();
+  assert.equal(await http.update(), false);
+  assert.match(http.getStats().error, /HTTP 500/);
+
+  const malformed = createSpaceWeatherLayer({ fetchImpl: async () => ({ ok: true, json: async () => ({}) }) });
+  malformed.enable();
+  assert.equal(await malformed.update(), false);
+  assert.match(malformed.getStats().error, /MALFORMED/);
+
+  const offline = createSpaceWeatherLayer({ fetchImpl: async () => { throw new Error('offline'); } });
+  offline.enable();
+  assert.equal(await offline.update(), false);
+  assert.match(offline.getStats().error, /UNAVAILABLE/);
+});

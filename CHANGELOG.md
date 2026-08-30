@@ -3,6 +3,194 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (f)
+
+### Added
+
+- Added `Dockerfile`, `docker-compose.yml` and `.dockerignore`, so the app
+  builds and runs with `docker compose up --build` and is reachable at
+  `http://localhost:4173`.
+- The container runs the Vite dev server rather than serving a static build,
+  because every live source reaches its provider through a middleware proxy in
+  `vite.config.js`; a built client has none of them and only some implement
+  `configurePreviewServer`.
+- `HOST` and `PORT` are wired through to the existing `env.HOST` / `env.PORT`
+  handling in `vite.config.js`, so the published port works with no CLI flags.
+- Keys are supplied at runtime from `.env` via Compose, never copied into the
+  image — `.dockerignore` keeps `.env` out of the build context entirely, along
+  with `node_modules`, `dist`, caches and the documentation media, taking the
+  context from ~449 MB to ~19 MB.
+- The proxy disk caches (`.gev-cache`) persist in a named volume, so an
+  OpenSky credit ledger or TomTom tile budget is not re-spent on every restart.
+
+### Security
+
+- The container publishes to `127.0.0.1` by default, preserving the app's
+  localhost-only posture. It binds `0.0.0.0` *inside* the container because a
+  container's loopback is not the host's — that is a reachability requirement,
+  not LAN exposure, which is controlled host-side and remains an explicit
+  opt-in via `GEV_BIND_ADDR`.
+- Compose declares `HOST`/`PORT` in `environment`, which takes precedence over
+  `env_file`. `.env.example` documents a `HOST=localhost` line, and a user who
+  uncommented it would otherwise bind the server to the container's own
+  loopback and get an unreachable app with no obvious cause.
+
+## [Unreleased] — 2026-08-30 (e)
+
+### Fixed
+
+- **The app no longer refuses to start without `GOOGLE_MAPS_API_KEY` (#64).**
+  `main.js` hard-threw before the viewer existed, so a missing key produced a
+  blank error screen rather than the perfectly good keyless globe the map-stack
+  controller has always supported. Photoreal is now acquired through an ordered
+  chain — Google direct → Cesium ion's mirror → none — and running out of
+  options degrades to the OSM globe instead of to nothing.
+- **EEA accounts refused by the Map Tiles API now have a route to photoreal
+  (#59).** A Google Maps account billed in the European Economic Area can get a
+  401 even with a valid key and live billing. Setting `CESIUM_ION_TOKEN` now
+  reaches the same Google tiles through ion's mirror (asset 2275207)
+  automatically, per the community workaround in #71.
+
+### Changed
+
+- The startup log and the map-source tray distinguish a credential that was
+  never set from one that was set and refused. Those are different problems —
+  one is a choice, the other is something the operator needs told about — and
+  reporting both as "unavailable" is what made an EEA 401 hard to diagnose.
+- `README.md` and `.env.example` no longer describe the Google Maps key as
+  required. It is strongly recommended (it buys photoreal, place search and
+  geocoding) but the app runs without it.
+
+## [Unreleased] — 2026-08-30 (d)
+
+### Added
+
+- Added **Weather Radar** and **IR Satellite** overlays from RainViewer's free
+  public API — two independently toggleable semi-transparent
+  `Cesium.ImageryLayer`s on the globe surface. Keyless and CORS-open, so both
+  the frame index and the tiles are fetched straight from the browser with no
+  server proxy.
+- Both overlays share one frame request per cycle: `weather-maps.json` carries
+  the radar and satellite frame lists in a single document, and the two layers
+  read a shared, coalesced cache rather than fetching it twice.
+- A poll that finds the same frame already on screen is a no-op. It does not
+  rebuild the imagery layer, which would discard a warm tile cache, re-request
+  every visible tile and flicker — all to draw the identical picture.
+- A new frame is added BEFORE the old one is removed, so the globe is never
+  momentarily bare.
+- Added `invalidateFrameCache()` on both layers, so a caller that knows the
+  shared cache is stale can force a refresh without waiting out the TTL.
+
+### Changed
+
+- The radar layer states its coverage gap on its own row: radar exists only
+  where a radar network does, so a blank area means unwatched, not dry — the
+  opposite reading of the same pixels. The satellite row states that infrared
+  measures cloud-top temperature, not rainfall.
+- Only the newest **observed** radar frame is used. RainViewer also publishes a
+  nowcast, which is a forecast; rendering it identically to an observation with
+  nothing saying so is the kind of quiet claim this project avoids.
+
+### Fixed
+
+- A stale frame no longer prints an absurd hour count (`24463H 48M OLD`). Past
+  a day the readout says the feed looks stalled, which is the actual
+  information.
+
+## [Unreleased] — 2026-08-30 (c)
+
+### Added
+
+- Added two independently toggleable open-data raster overlays, drawn as
+  `Cesium.ImageryLayer`s on the globe surface: **Sea Marks** (OpenSeaMap —
+  buoys, beacons, lighthouses, harbours) and **Ski Pistes** (OpenSnowMap —
+  pistes, lifts, nordic trails). Both keyless and ODbL.
+- Each overlay reports when it is switched on but not on screen. They draw on
+  the Cesium globe, which the app hides whenever Google Photorealistic 3D Tiles
+  are active — and photoreal is the default — so the layer row reads
+  `HIDDEN ON GOOGLE 3D · SWITCH MAP SOURCE TO SEE THIS` rather than showing a
+  lit toggle over an empty globe. Switching to OSM, Bing, GIBS or Sentinel
+  reveals it with no reload.
+- Both overlays cap their zoom range to what each source actually renders, so
+  panning cannot turn into a 404 storm against a volunteer-run tile server.
+
+## [Unreleased] — 2026-08-30 (b)
+
+### Added
+
+- Added a **Global Reporting** layer (GDELT): geocoded event reporting from
+  worldwide coverage in 65 languages over the trailing 24 hours. The query
+  surface is a closed allowlist of themes — the client sends a preset id and
+  the proxy refuses anything else — because GDELT's API will geocode a person's
+  name and this project does not build named-person search.
+- Added **Weather Alerts** (NOAA NWS) and **Tropical Cyclones** (NOAA NHC).
+  Both keyless and US public domain.
+- Added **Space Weather** (NOAA SWPC): the OVATION auroral oval and planetary
+  K-index, with the operational consequence shown next to the number — a
+  geomagnetic storm is simultaneously HF fade, satellite drag and GNSS error.
+- Added **Vessel Events** (Global Fishing Watch): AIS gaps, encounters,
+  loitering and port visits — the behaviour a live-position layer structurally
+  cannot show. Optional `GFW_API_TOKEN`; **CC BY-NC 4.0, non-commercial only**.
+- Added **Copernicus Sentinel-1 SAR and Sentinel-2** map sources. Tiles are
+  proxied server-side because Copernicus needs an OAuth token that must never
+  reach the browser. Optional; the sources stay unavailable, with a stated
+  reason, until the server is configured.
+- Added `src/data/numeric.js`, shared strict coercion for external feed values.
+
+### Fixed
+
+- A missing planetary K-index no longer reads as a quiet one, and a blank Kp row
+  no longer reports 0. Both were the `Number(null) === 0` trap that had already
+  produced "0 acres" for wildfires of unknown size; the shared helper now
+  prevents the whole class.
+
+### Changed
+
+- Two share-link tests derived their "unknown layer token" from the registry
+  instead of hardcoding a letter, which had silently become a registered token.
+
+## [Unreleased] — 2026-08-30
+
+### Added
+
+- Added a rolling history buffer and timeline scrubber (`T`): rewind, play,
+  step, and loop the last 30 minutes of the live globe, and export the buffered
+  window as JSON. The buffer records only what the session already fetched for
+  the layers that were switched on, so rewinding issues no upstream request and
+  costs nothing at any provider.
+- Added NASA GIBS satellite imagery as two keyless map sources: **Earth Today**
+  (VIIRS global daily mosaic) and **GOES GeoColor** (geostationary, ~10 minute
+  cadence). Each names its own coverage, because a global mosaic stitched from
+  swaths hours apart and a ten-minute view of one hemisphere are different
+  pictures of Earth.
+- Added a **Fire Perimeters** layer (NIFC / WFIGS): the mapped edge of what has
+  burned, complementing the FIRMS hotspot detections already carried.
+- Added cross-platform developer entry points so the repository works on
+  Windows: `npm run dev:secure` and `npm run opensky:import` are now Node
+  scripts rather than bash, and `.gitattributes` pins shell scripts to LF.
+
+### Changed
+
+- Timeline replay asks the flights, military, vessel and fire-perimeter layers
+  to stand down while a past frame is on screen, so the present and the past are
+  never drawn on top of each other. Suppression is a display state only —
+  polling, tracking, click handlers and trails are untouched.
+- Key resolution in the cross-platform launcher prefers an explicit environment
+  variable over the macOS Keychain. `dev-secure.sh` preferred the Keychain,
+  which silently ignored a key the operator had just exported.
+- The unit runner now also discovers tests under `scripts/`.
+
+### Fixed
+
+- A wildfire perimeter with an unreadable size now reports "size unknown"
+  instead of "0 acres" — `Number(null)` is `0`, and the two are different facts.
+- The credential importer no longer writes `.env` one directory above the
+  repository, and now tightens an existing `.env` to mode 0600 (the mode option
+  on `writeFileSync` applies only when it creates the file).
+- The QA matrix runner tears its harness process tree down on Windows, where
+  process groups do not exist; it previously left orphaned Chromium instances
+  running for the rest of the fleet.
+
 ## [Unreleased] — 2026-08-24
 
 ### Added

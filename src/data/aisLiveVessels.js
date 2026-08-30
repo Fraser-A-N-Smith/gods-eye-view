@@ -399,6 +399,23 @@ const aisLiveVesselsLayer = {
     state.loadingLabel = '';
   },
 
+  /**
+   * Hide or restore live vessel rendering while the timeline scrubber replays
+   * a past frame (src/timeline/). Optional hook — see the note on the same
+   * method in flights.js.
+   *
+   * Routed through the layer's own setVisible() so the world-overlay labels
+   * are suppressed alongside the billboards; hiding the billboards alone would
+   * leave a field of vessel labels floating over the replayed scene. The
+   * AISStream socket, the selection and the wake trail are untouched.
+   *
+   * @param {boolean} suppressed True while a replay frame owns the globe.
+   */
+  setReplaySuppressed(suppressed) {
+    if (!state.enabled) return;
+    setVisible(!suppressed);
+  },
+
   update(viewer) {
     if (!state.enabled) return Promise.resolve();
     return loadLivePositions(viewer || state.viewer);

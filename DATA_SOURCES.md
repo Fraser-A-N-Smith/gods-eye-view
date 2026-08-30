@@ -36,6 +36,17 @@ How to read this:
 | **TfL Open Data (JamCams)** | CCTV camera catalog + frames, London | [TfL Open Data terms](https://tfl.gov.uk/info-for/open-data-users/) — attribution REQUIRED | "Powered by TfL Open Data. Contains OS data © Crown copyright and database rights" |
 | **GBFS (Lyft / BCycle)** | Bikeshare availability | Per-feed (attribution-only) | Credit the operator (e.g. Austin BCycle) + its `license_url` |
 | **Radio Browser** | Geolocated internet-radio station directory and station-level tags | Public-domain directory data under PDDL 1.0; individual broadcaster stream terms apply | "Radio Browser" plus a link to the selected broadcaster |
+| **NASA EOSDIS GIBS** (Worldview) | Near-real-time satellite imagery basemaps — the *Earth Today* global daily mosaic and the *GOES GeoColor* geostationary composite | [NASA EOSDIS data use policy](https://www.earthdata.nasa.gov/engage/open-data-services-software-policies) — full and open, no restrictions; acknowledgement requested | "Imagery courtesy NASA EOSDIS GIBS / Worldview" |
+| **GDELT Project (GEO 2.0)** | Geocoded global event reporting for the Global Reporting layer, by theme, trailing 24h | Unlimited academic, commercial or governmental use; redistribution permitted; citation and link required | "The GDELT Project" + link to gdeltproject.org |
+| **NOAA National Weather Service** | Live US watches, warnings and advisories | US public domain | "NOAA / National Weather Service" |
+| **NOAA National Hurricane Center** | Active tropical cyclone advisory positions and intensity | US public domain | "NOAA / National Hurricane Center" |
+| **NOAA Space Weather Prediction Center** | OVATION aurora forecast grid and planetary K-index | US public domain | "NOAA / NWS Space Weather Prediction Center" |
+| **Copernicus Data Space (Sentinel Hub)** | Sentinel-1 SAR and Sentinel-2 optical imagery basemaps (optional, BYO credentials) | [Copernicus data policy](https://dataspace.copernicus.eu) — free and open, including commercial use; attribution required | "Contains modified Copernicus Sentinel data — ESA" |
+| **Global Fishing Watch** ⚠️ | Vessel events — AIS gaps, encounters, loitering, port visits (optional, BYO token) | **CC BY-NC 4.0 — NonCommercial.** See the warning below | "Global Fishing Watch" + link |
+| **RainViewer** | Live weather radar (precipitation reflectivity) and infrared satellite cloud-cover overlays | Free public API, no key. RainViewer offers it for personal, educational and small-scale community use with no SLA — **verify current terms before any commercial or high-volume deployment** | "Weather radar © RainViewer" / "Satellite imagery © RainViewer" |
+| **OpenSeaMap** | Sea-mark raster overlay — buoys, beacons, lighthouses, harbours | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSeaMap contributors" |
+| **OpenSnowMap** | Ski piste raster overlay — pistes, lifts, nordic trails | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSnowMap.org, © OpenStreetMap contributors" |
+| **NIFC / WFIGS** | Mapped wildfire perimeters (US interagency coverage) | US public domain (interagency wildland fire data) | "NIFC / WFIGS Interagency Wildland Fire Perimeters" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 
 ### Notes on the live sources
@@ -73,6 +84,27 @@ The submarine-cable GeoJSON is **CC BY-NC-SA 3.0** (Attribution-**NonCommercial*
 > If you use God's Eye View commercially, delete `src/data/local_data/telegeography_submarine_cables/` (or obtain a commercial license from TeleGeography). It is one self-contained folder; the rest of the app runs without it.
 
 The richer structured dataset is licensed separately/commercially by TeleGeography.
+
+### ⚠️ Global Fishing Watch is NonCommercial
+
+The vessel-events layer fetches from Global Fishing Watch under **CC BY-NC 4.0**
+(Attribution-**NonCommercial**). Nothing is bundled — the layer is off unless you
+supply your own `GFW_API_TOKEN` — but the license still governs what you may do
+with what it returns:
+
+> If you use God's Eye View commercially, do not enable the vessel-events layer,
+> and do not redistribute its output. GFW grants free access for academic
+> research, NGOs, governments, and anything free and open that contributes to
+> the public good; it explicitly reserves the right to revoke access for
+> commercial use.
+
+This is the second NonCommercial source in the project, alongside the bundled
+TeleGeography cables. Both are optional and both are self-contained: a
+commercial deployment drops the cables folder and leaves `GFW_API_TOKEN` unset.
+
+GFW also asks that clients stay under 50,000 requests/day. The proxy's 30-minute
+cache and single-flight coalescing keep an ordinary session several orders of
+magnitude below that.
 
 ### ODbL share-alike (datacenters, dams)
 

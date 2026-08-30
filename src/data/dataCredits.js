@@ -169,6 +169,72 @@ export const DATA_CREDITS = [
       'part of NASA’s Earth Observing System Data and Information System (EOSDIS)',
   },
   {
+    key: 'rainviewer',
+    html:
+      'Weather radar &amp; infrared satellite overlays: ' +
+      '<a href="https://www.rainviewer.com" target="_blank" rel="noopener">RainViewer</a> ' +
+      '(free public API — non-commercial and small-scale use)',
+  },
+  {
+    key: 'openseamap',
+    html:
+      'Sea marks (buoys, beacons, lighthouses, harbours): ' +
+      '<a href="https://www.openseamap.org" target="_blank" rel="noopener">OpenSeaMap</a> ' +
+      'contributors (ODbL 1.0)',
+  },
+  {
+    key: 'opensnowmap',
+    html:
+      'Ski pistes, lifts and nordic trails: ' +
+      '<a href="https://www.opensnowmap.org" target="_blank" rel="noopener">OpenSnowMap.org</a> ' +
+      '&amp; © OpenStreetMap contributors (ODbL 1.0)',
+  },
+  {
+    key: 'noaa-nws',
+    html:
+      'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +
+      'National Hurricane Center (' +
+      '<a href="https://www.weather.gov" target="_blank" rel="noopener">weather.gov</a>' +
+      ', US public domain)',
+  },
+  {
+    key: 'noaa-swpc',
+    html:
+      'Space weather (aurora forecast, planetary K-index): NOAA / NWS Space Weather ' +
+      'Prediction Center (' +
+      '<a href="https://www.swpc.noaa.gov" target="_blank" rel="noopener">swpc.noaa.gov</a>' +
+      ', US public domain)',
+  },
+  {
+    key: 'copernicus',
+    html:
+      'Sentinel-1 SAR &amp; Sentinel-2 optical imagery: Contains modified Copernicus ' +
+      'Sentinel data — European Space Agency / ' +
+      '<a href="https://dataspace.copernicus.eu" target="_blank" rel="noopener">Copernicus Data Space</a>',
+  },
+  {
+    key: 'gfw',
+    html:
+      'Vessel events (AIS gaps, encounters, loitering, port visits): ' +
+      '<a href="https://globalfishingwatch.org" target="_blank" rel="noopener">Global Fishing Watch</a> ' +
+      '(CC BY-NC 4.0 — <strong>non-commercial use only</strong>)',
+  },
+  {
+    key: 'nifc',
+    html:
+      'Wildfire perimeters: National Interagency Fire Center — WFIGS Interagency ' +
+      'Wildland Fire Perimeters (' +
+      '<a href="https://data-nifc.opendata.arcgis.com" target="_blank" rel="noopener">data-nifc.opendata.arcgis.com</a>' +
+      ', public domain)',
+  },
+  {
+    key: 'gibs',
+    html:
+      'Satellite imagery basemaps: NASA EOSDIS Global Imagery Browse Services ' +
+      '(GIBS) / Worldview — ' +
+      '<a href="https://worldview.earthdata.nasa.gov" target="_blank" rel="noopener">worldview.earthdata.nasa.gov</a>',
+  },
+  {
     key: 'telegeography',
     html:
       'Submarine cables: © TeleGeography — ' +
