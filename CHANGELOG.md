@@ -3,6 +3,38 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-30 (f)
+
+### Added
+
+- Added `Dockerfile`, `docker-compose.yml` and `.dockerignore`, so the app
+  builds and runs with `docker compose up --build` and is reachable at
+  `http://localhost:4173`.
+- The container runs the Vite dev server rather than serving a static build,
+  because every live source reaches its provider through a middleware proxy in
+  `vite.config.js`; a built client has none of them and only some implement
+  `configurePreviewServer`.
+- `HOST` and `PORT` are wired through to the existing `env.HOST` / `env.PORT`
+  handling in `vite.config.js`, so the published port works with no CLI flags.
+- Keys are supplied at runtime from `.env` via Compose, never copied into the
+  image — `.dockerignore` keeps `.env` out of the build context entirely, along
+  with `node_modules`, `dist`, caches and the documentation media, taking the
+  context from ~449 MB to ~19 MB.
+- The proxy disk caches (`.gev-cache`) persist in a named volume, so an
+  OpenSky credit ledger or TomTom tile budget is not re-spent on every restart.
+
+### Security
+
+- The container publishes to `127.0.0.1` by default, preserving the app's
+  localhost-only posture. It binds `0.0.0.0` *inside* the container because a
+  container's loopback is not the host's — that is a reachability requirement,
+  not LAN exposure, which is controlled host-side and remains an explicit
+  opt-in via `GEV_BIND_ADDR`.
+- Compose declares `HOST`/`PORT` in `environment`, which takes precedence over
+  `env_file`. `.env.example` documents a `HOST=localhost` line, and a user who
+  uncommented it would otherwise bind the server to the container's own
+  loopback and get an unreachable app with no obvious cause.
+
 ## [Unreleased] — 2026-08-30 (e)
 
 ### Fixed

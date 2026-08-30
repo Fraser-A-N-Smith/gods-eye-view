@@ -1,0 +1,48 @@
+# Build context exclusions.
+#
+# Two jobs here: keep the context small (this repo carries ~10 MB of bundled
+# GeoJSON and ~20 MB of documentation GIFs), and keep secrets and host-specific
+# state out of the image entirely.
+
+# Dependencies — reinstalled in the image from the lockfile. A host
+# node_modules is also frequently the wrong platform's native binaries (sharp),
+# which would break the build in ways that look like a code problem.
+node_modules
+**/node_modules
+
+# Build output — the image builds its own.
+dist
+
+# SECRETS. .env must never enter the build context: anything copied into an
+# image is readable by anyone who can pull it, regardless of later layers that
+# delete it. Compose supplies these at RUNTIME instead (see docker-compose.yml).
+.env
+.env.*
+!.env.example
+
+# Runtime caches and logs — host state, not image content. The proxy disk
+# caches (.gev-cache) live in a named volume so they survive restarts.
+.gev-cache
+.gev-logs
+*.log
+qa-shots
+screenshots
+output
+
+# Version control and CI metadata.
+.git
+.gitignore
+.gitattributes
+.github
+
+# Editor and OS noise.
+.DS_Store
+.vscode
+.idea
+
+# Documentation media — large, and never read at runtime. The markdown files
+# stay: they are small and useful to have inside the image.
+docs/media
+
+# Local tooling that has no meaning inside a container.
+.claude

@@ -96,6 +96,8 @@ npm run dev -- --host localhost --port 4173
 
 The dev server binds to **localhost** — your keys stay on your machine. Sharing on a LAN safely is covered in [Sharing an instance](#-sharing-an-instance) and [SECURITY.md](SECURITY.md).
 
+**Docker:** `docker compose up --build`, then open **`http://localhost:4173`**. Put your keys in `.env` first — Compose passes them in at runtime and they are never baked into the image. The container publishes to **127.0.0.1 only**, matching the app's own default; sharing on a LAN is an explicit opt-in (`GEV_BIND_ADDR=0.0.0.0 docker compose up`) and you should read [SECURITY.md](SECURITY.md) before you do. It runs the dev server on purpose: a static build has none of the API proxies. No keys at all still works — you get the OSM globe.
+
 **macOS shortcut:** `./scripts/dev-fresh.sh` clears the Vite cache and pulls your keys straight from the Keychain.
 
 **Windows / Linux:** everything above works as written — `npm install`, `npm run dev`, `npm test`, and `npm run build` are plain Node and need no shell. On Windows, use `copy .env.example .env` (cmd) or `Copy-Item .env.example .env` (PowerShell) for step 1. `npm run dev:secure` is the cross-platform launcher: it finds your keys in the environment, the Keychain (macOS only), or `.env`, tells you which source each came from, and starts the server. The `.sh` scripts remain macOS/Linux-only and nothing needs them.
