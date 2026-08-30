@@ -43,6 +43,7 @@ import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
 import { parseAuroraGrid, parsePlanetaryKp } from './src/data/spaceWeatherShape.js';
+import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -2189,12 +2190,12 @@ function spaceWeatherProxy() {
  * other — filters and normalizes server-side, and serves the merged,
  * capped result as `{ hazards: [...], retrievedAt }`.
  *
- * `mapGdacsFeatureServer`/`mapEonetFeatureServer` intentionally duplicate
- * the pure `mapGdacsFeature`/`mapEonetFeature` filter logic in
- * `src/data/globalHazards.js` rather than importing it: that client module
- * imports the `cesium` package, which has no business loading into this
- * Node-only config process. Keep the two copies in sync by hand;
- * `globalHazards.test.mjs` pins the exact rule set.
+ * The actual GDACS/EONET filter and mapping rules live in the Cesium-free
+ * `src/data/globalHazardsShape.js` (mirroring the existing
+ * `spaceWeatherShape.js` precedent) and are imported directly below — this
+ * proxy and the browser layer run the SAME `mapGdacsFeature`/
+ * `mapEonetFeature` implementation, so there is nothing here to fall out of
+ * sync. `globalHazardsShape.test.mjs` covers the filter contract once.
  *
  * @returns {import('vite').Plugin}
  */
@@ -2206,49 +2207,6 @@ function globalHazardsProxy() {
   const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH';
   const EONET_URL = 'https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=300';
   const ATTRIBUTION = 'GDACS — Global Disaster Alert and Coordination System / NASA EONET';
-
-  const GDACS_TYPES = new Set(['FL', 'DR']);
-  const EONET_CATEGORIES = new Set([
-    'severeStorms', 'landslides', 'seaLakeIce', 'tempExtremes', 'dustHaze', 'snow', 'waterColor',
-  ]);
-
-  function mapGdacsFeatureServer(feature) {
-    const p = feature?.properties;
-    if (!p || !GDACS_TYPES.has(p.eventtype)) return null;
-    if (p.iscurrent !== 'true' || p.alertlevel === 'Green') return null;
-    const [lon, lat] = feature.geometry?.coordinates || [];
-    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-    return {
-      id: `gdacs:${p.eventtype}:${p.eventid}`,
-      source: 'GDACS',
-      kind: p.eventtype,
-      title: p.name || p.description || 'GDACS event',
-      lat,
-      lon,
-      severity: p.alertlevel || 'Orange',
-      url: p.url?.report || null,
-      dateMs: Date.parse(p.datemodified || p.fromdate || '') || null,
-    };
-  }
-
-  function mapEonetFeatureServer(event) {
-    const categoryId = event?.categories?.[0]?.id;
-    if (!categoryId || !EONET_CATEGORIES.has(categoryId)) return null;
-    const geom = Array.isArray(event.geometry) ? event.geometry.at(-1) : null;
-    const [lon, lat] = geom?.coordinates || [];
-    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-    return {
-      id: `eonet:${event.id}`,
-      source: 'EONET',
-      kind: categoryId,
-      title: event.title || 'EONET event',
-      lat,
-      lon,
-      severity: 'Orange',
-      url: event.link || null,
-      dateMs: Date.parse(geom?.date || '') || null,
-    };
-  }
 
   let cache = null;
   let diskLoaded = false;
@@ -2301,6 +2259,8 @@ function globalHazardsProxy() {
       fetchJson(EONET_URL),
     ]);
     if (gdacsResult.status !== 'fulfilled' && eonetResult.status !== 'fulfilled') {
+      console.warn(`[global-hazards-proxy] GDACS fetch failed: ${gdacsResult.reason?.message || gdacsResult.reason}`);
+      console.warn(`[global-hazards-proxy] EONET fetch failed: ${eonetResult.reason?.message || eonetResult.reason}`);
       throw gdacsResult.reason;
     }
 
@@ -2308,7 +2268,7 @@ function globalHazardsProxy() {
     if (gdacsResult.status === 'fulfilled') {
       const features = Array.isArray(gdacsResult.value?.features) ? gdacsResult.value.features : [];
       for (const feature of features) {
-        const mapped = mapGdacsFeatureServer(feature);
+        const mapped = mapGdacsFeature(feature);
         if (mapped) hazards.push(mapped);
       }
     } else {
@@ -2317,7 +2277,7 @@ function globalHazardsProxy() {
     if (eonetResult.status === 'fulfilled') {
       const events = Array.isArray(eonetResult.value?.events) ? eonetResult.value.events : [];
       for (const event of events) {
-        const mapped = mapEonetFeatureServer(event);
+        const mapped = mapEonetFeature(event);
         if (mapped) hazards.push(mapped);
       }
     } else {

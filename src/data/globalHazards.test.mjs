@@ -1,9 +1,14 @@
 // src/data/globalHazards.test.mjs
-// Focused tests for the pure mapper/filter functions (analyst query engine
-// seam and the GDACS/EONET filter contract), plus lifecycle tests against a
-// mocked /api/global-hazards proxy response.
+// Focused tests for the analyst-record mapper (analyst query engine seam)
+// plus lifecycle tests against a mocked /api/global-hazards proxy response.
+// The GDACS/EONET filter/mapping CONTRACT itself (mapGdacsFeature/
+// mapEonetFeature) is tested once, in globalHazardsShape.test.mjs, against
+// the single shared implementation both this layer and vite.config.js's
+// proxy import from globalHazardsShape.js.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as Cesium from 'cesium';
+import * as GlobalHazardsShape from './globalHazardsShape.js';
 import {
   createGlobalHazardsLayer,
   mapAnalystRecord,
@@ -60,87 +65,15 @@ test('global hazards analyst record: output is JSON-safe (no Cesium types)', () 
   assert.deepEqual(JSON.parse(JSON.stringify(r)), r);
 });
 
-// ── GDACS filter/mapping contract ─────────────────────────────────────────
+// ── Re-export wiring ────────────────────────────────────────────────────────
+// Not a re-test of the filter contract (that lives once in
+// globalHazardsShape.test.mjs) — just confirms globalHazards.js's exported
+// mapGdacsFeature/mapEonetFeature really are the shared implementation by
+// reference, not a second copy that happens to look similar.
 
-test('mapGdacsFeature: keeps only FL/DR, current, non-Green events', () => {
-  const base = {
-    geometry: { coordinates: [56.78, 12.34] },
-    properties: {
-      eventtype: 'FL', eventid: '12345', name: 'Flood', alertlevel: 'Red',
-      iscurrent: 'true', datemodified: '2026-08-20T00:00:00Z',
-      url: { report: 'https://gdacs.org/report/12345' },
-    },
-  };
-  const kept = mapGdacsFeature(base);
-  assert.deepEqual(kept, {
-    id: 'gdacs:FL:12345',
-    source: 'GDACS',
-    kind: 'FL',
-    title: 'Flood',
-    lat: 12.34,
-    lon: 56.78,
-    severity: 'Red',
-    url: 'https://gdacs.org/report/12345',
-    dateMs: Date.parse('2026-08-20T00:00:00Z'),
-  });
-
-  for (const eventtype of ['EQ', 'TC', 'WF', 'VO']) {
-    assert.equal(mapGdacsFeature({
-      ...base,
-      properties: { ...base.properties, eventtype },
-    }), null, `${eventtype} duplicates a dedicated layer and must be dropped`);
-  }
-  assert.equal(mapGdacsFeature({
-    ...base,
-    properties: { ...base.properties, alertlevel: 'Green' },
-  }), null, 'Green alert level is routine noise and must be dropped');
-  assert.equal(mapGdacsFeature({
-    ...base,
-    properties: { ...base.properties, iscurrent: 'false' },
-  }), null, 'non-current episodes must be dropped');
-  assert.equal(mapGdacsFeature({
-    ...base,
-    geometry: { coordinates: ['not-a-number', 12.34] },
-  }), null, 'non-finite coordinates must be dropped');
-  assert.equal(mapGdacsFeature(null), null);
-  assert.equal(mapGdacsFeature({}), null);
-});
-
-// ── EONET filter/mapping contract ─────────────────────────────────────────
-
-test('mapEonetFeature: keeps only allow-listed categories and the LAST geometry point', () => {
-  const base = {
-    id: 'EONET_1234',
-    title: 'Severe Storm Test',
-    link: 'https://eonet.gsfc.nasa.gov/api/v3/events/EONET_1234',
-    categories: [{ id: 'severeStorms', title: 'Severe Storms' }],
-    geometry: [
-      { date: '2026-08-18T00:00:00Z', type: 'Point', coordinates: [10, 20] },
-      { date: '2026-08-20T00:00:00Z', type: 'Point', coordinates: [11, 21] },
-    ],
-  };
-  const kept = mapEonetFeature(base);
-  assert.deepEqual(kept, {
-    id: 'eonet:EONET_1234',
-    source: 'EONET',
-    kind: 'severeStorms',
-    title: 'Severe Storm Test',
-    lat: 21,
-    lon: 11,
-    severity: 'Orange',
-    url: 'https://eonet.gsfc.nasa.gov/api/v3/events/EONET_1234',
-    dateMs: Date.parse('2026-08-20T00:00:00Z'),
-  });
-
-  for (const categoryId of ['wildfires', 'volcanoes', 'earthquakes', 'floods']) {
-    assert.equal(mapEonetFeature({
-      ...base,
-      categories: [{ id: categoryId, title: categoryId }],
-    }), null, `${categoryId} duplicates a dedicated layer and must be dropped`);
-  }
-  assert.equal(mapEonetFeature({ ...base, categories: [] }), null, 'no category must be dropped');
-  assert.equal(mapEonetFeature({ ...base, geometry: [] }), null, 'no geometry must be dropped');
-  assert.equal(mapEonetFeature(null), null);
+test('globalHazards.js re-exports the SAME mapGdacsFeature/mapEonetFeature functions globalHazardsShape.js implements', () => {
+  assert.equal(mapGdacsFeature, GlobalHazardsShape.mapGdacsFeature);
+  assert.equal(mapEonetFeature, GlobalHazardsShape.mapEonetFeature);
 });
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -188,6 +121,18 @@ test('global hazards lifecycle populates entities from the merged proxy payload'
       entities.map((entity) => entity.label.text.getValue()).sort(),
       ['FL', 'severeStorms'],
     );
+
+    // Severity styling: Red reads bigger and red, Orange smaller and orange —
+    // asserted by entity, not just exercised, so a styling regression fails here.
+    const redEntity = entities.find((entity) => entity.id === 'hazard:gdacs:FL:1');
+    const orangeEntity = entities.find((entity) => entity.id === 'hazard:eonet:EONET_2');
+    assert.ok(redEntity && orangeEntity, 'both styled entities must be found by id');
+    const redPixelSize = redEntity.point.pixelSize.getValue();
+    const orangePixelSize = orangeEntity.point.pixelSize.getValue();
+    assert.ok(redPixelSize > orangePixelSize, 'Red severity must render bigger than Orange');
+    assert.ok(redEntity.point.color.getValue().equals(Cesium.Color.RED), 'Red severity must render red');
+    assert.ok(orangeEntity.point.color.getValue().equals(Cesium.Color.ORANGE), 'Orange severity must render orange');
+
     assert.equal(layer.getStats().count, 2);
     assert.ok(Number.isFinite(layer.getStats().lastUpdate));
     assert.equal(layer.getStats().error, null);

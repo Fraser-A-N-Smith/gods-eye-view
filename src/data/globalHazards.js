@@ -1,4 +1,5 @@
 import * as Cesium from 'cesium';
+import { mapEonetFeature, mapGdacsFeature } from './globalHazardsShape.js';
 
 /**
  * Global Hazards — GDACS floods & droughts, merged with the NASA EONET
@@ -9,20 +10,19 @@ import * as Cesium from 'cesium';
  * directly from gdacs.org or eonet.gsfc.nasa.gov — neither upstream's CORS
  * posture is reliable for a direct browser fetch (same reasoning as
  * `spaceWeatherProxy`'s doc comment in vite.config.js). The proxy does the
- * GDACS/EONET fetch, filter, and merge and hands back a flat
- * `{ hazards: [...], retrievedAt }` payload already in this layer's record
- * shape, so `update()` below only needs to place points — it does not
- * re-run the filtering rules against raw upstream JSON.
+ * GDACS/EONET fetch, filter, and merge (via the SAME `mapGdacsFeature`/
+ * `mapEonetFeature` imported below — see `globalHazardsShape.js`) and hands
+ * back a flat `{ hazards: [...], retrievedAt }` payload already in this
+ * layer's record shape, so `update()` below only needs to place points — it
+ * does not re-run the filtering rules against raw upstream JSON.
  *
- * `mapGdacsFeature`/`mapEonetFeature` below are pure, exported copies of the
- * filter/mapping rules the proxy applies server-side (see
- * `mapGdacsFeatureServer`/`mapEonetFeatureServer` in vite.config.js). They
- * are NOT on the live data path — the browser always consumes the
- * already-merged proxy response — they exist so the filter CONTRACT (which
- * GDACS event types and EONET categories survive, and why) is unit-testable
- * from this file without importing the Node-only vite config, which would
- * also drag this module's `cesium` import into that process. Keep both
- * copies in sync by hand; `globalHazards.test.mjs` pins the exact rule set.
+ * `mapGdacsFeature`/`mapEonetFeature` are re-exported here (not merely
+ * imported) so this module's public interface is unchanged: they are pure
+ * and Cesium-free, live in `globalHazardsShape.js` precisely so
+ * `vite.config.js` can import the SAME implementation the proxy actually
+ * runs without dragging this file's `cesium` import into that Node-only
+ * process (mirroring the existing `spaceWeatherShape.js` precedent). One
+ * implementation, tested once, in `globalHazardsShape.test.mjs`.
  *
  * Each hazard renders as a small colored point (not an ellipse — these are
  * discrete alert markers, not magnitude-scaled zones) with a `kind` label,
@@ -35,67 +35,7 @@ const API_URL = '/api/global-hazards';
 
 export const GLOBAL_HAZARDS_OVERLAY_SOURCE_ID = 'global-hazards';
 
-/** GDACS `eventtype` codes kept here. EQ/TC/WF/VO all duplicate a dedicated layer. */
-const GDACS_TYPES = new Set(['FL', 'DR']);
-
-/** EONET `categories[0].id` values kept here. wildfires/volcanoes/earthquakes/floods all dup a dedicated layer. */
-const EONET_CATEGORIES = new Set([
-  'severeStorms', 'landslides', 'seaLakeIce', 'tempExtremes', 'dustHaze', 'snow', 'waterColor',
-]);
-
-/**
- * Map one raw GDACS GeoJSON feature to a normalized hazard record, or null
- * if the feature should be filtered out. Pure — see the module doc comment
- * for why this exists alongside the server-side `mapGdacsFeatureServer`.
- * @param {object} feature - A GDACS `geteventlist` GeoJSON feature.
- * @returns {{id:string, source:'GDACS', kind:string, title:string, lat:number,
- *   lon:number, severity:string, url:string|null, dateMs:number|null}|null}
- */
-export function mapGdacsFeature(feature) {
-  const p = feature?.properties;
-  if (!p || !GDACS_TYPES.has(p.eventtype)) return null;
-  if (p.iscurrent !== 'true' || p.alertlevel === 'Green') return null;
-  const [lon, lat] = feature.geometry?.coordinates || [];
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-  return {
-    id: `gdacs:${p.eventtype}:${p.eventid}`,
-    source: 'GDACS',
-    kind: p.eventtype,
-    title: p.name || p.description || 'GDACS event',
-    lat,
-    lon,
-    severity: p.alertlevel || 'Orange',
-    url: p.url?.report || null,
-    dateMs: Date.parse(p.datemodified || p.fromdate || '') || null,
-  };
-}
-
-/**
- * Map one raw EONET event to a normalized hazard record, or null if the
- * event should be filtered out. Pure — takes the LAST geometry entry (EONET
- * events can carry a track of points over time; the most recent is current).
- * @param {object} event - A NASA EONET v3 event.
- * @returns {{id:string, source:'EONET', kind:string, title:string, lat:number,
- *   lon:number, severity:string, url:string|null, dateMs:number|null}|null}
- */
-export function mapEonetFeature(event) {
-  const categoryId = event?.categories?.[0]?.id;
-  if (!categoryId || !EONET_CATEGORIES.has(categoryId)) return null;
-  const geom = Array.isArray(event.geometry) ? event.geometry.at(-1) : null;
-  const [lon, lat] = geom?.coordinates || [];
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-  return {
-    id: `eonet:${event.id}`,
-    source: 'EONET',
-    kind: categoryId,
-    title: event.title || 'EONET event',
-    lat,
-    lon,
-    severity: 'Orange',
-    url: event.link || null,
-    dateMs: Date.parse(geom?.date || '') || null,
-  };
-}
+export { mapEonetFeature, mapGdacsFeature };
 
 /** Point styling by GDACS-style alert severity. Anything but 'Red' reads as Orange. */
 function severityStyle(severity) {
