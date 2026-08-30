@@ -36,6 +36,12 @@ const MAX_RECORDS = 200;
  * × 1°lat, subsquare = 5′lon × 2.5′lat) into the lat/lon **center** of the
  * smallest resolved cell. Returns null for any input that is not a
  * syntactically valid locator — never throws.
+ *
+ * An 8-character locator's trailing extended-square digits are accepted by
+ * the grammar (so an 8-char locator is never rejected as invalid) but are
+ * intentionally NOT decoded to any finer precision than the 6-char
+ * subsquare — this decoder resolves no further than subsquare, so an
+ * 8-char locator returns the exact same center as its 6-char prefix.
  * @param {string} locator
  * @returns {{lat: number, lon: number}|null}
  */
@@ -91,6 +97,12 @@ function textOrNull(value) {
  * either locator fails to decode, since a one-sided arc has nowhere to draw
  * its other end. Capped at {@link MAX_RECORDS}.
  *
+ * The synthesized `id` includes `frequency` alongside sender/receiver
+ * callsign and `flowStartSeconds`: FT8's 15-second decode windows are
+ * globally time-synchronized across bands, and this query has no band
+ * filter, so the SAME sender/receiver pair decoded simultaneously on two
+ * bands is a real, common case that would otherwise collide on one id.
+ *
  * @param {string} xmlText - Raw upstream XML response body.
  * @returns {Array<{id: string, senderCallsign: string|null,
  *   receiverCallsign: string|null, senderLat: number, senderLon: number,
@@ -112,15 +124,18 @@ export function parsePskReporterXml(xmlText) {
     if (!senderPos || !receiverPos) continue; // one-sided arc — drop it
 
     const flowStartSeconds = finiteOrNull(attr(attrsText, 'flowStartSeconds'));
+    const frequencyHz = finiteOrNull(attr(attrsText, 'frequency'));
     spots.push({
-      id: `${senderCallsign || '?'}-${receiverCallsign || '?'}-${flowStartSeconds ?? spots.length}`,
+      // Includes frequencyHz — see the doc comment above for why sender +
+      // receiver + flowStartSeconds alone is not unique enough.
+      id: `${senderCallsign || '?'}-${receiverCallsign || '?'}-${flowStartSeconds ?? spots.length}-${frequencyHz ?? '?'}`,
       senderCallsign,
       receiverCallsign,
       senderLat: senderPos.lat,
       senderLon: senderPos.lon,
       receiverLat: receiverPos.lat,
       receiverLon: receiverPos.lon,
-      frequencyHz: finiteOrNull(attr(attrsText, 'frequency')),
+      frequencyHz,
       mode: textOrNull(attr(attrsText, 'mode')),
       snr: finiteOrNull(attr(attrsText, 'sNR')),
       flowStartSeconds,

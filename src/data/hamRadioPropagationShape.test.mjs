@@ -85,6 +85,24 @@ test('parsePskReporterXml: missing numeric attributes become null, never NaN', (
   }
 });
 
+test('parsePskReporterXml: same sender/receiver/flowStartSeconds on two bands gets two DISTINCT ids', () => {
+  // FT8's 15-second decode windows are globally time-synchronized across
+  // bands, and this query has no band filter, so the same station pair
+  // decoded simultaneously on two different bands (here: 20m vs 40m) is a
+  // real, common case — the synthesized id must include frequency, or the
+  // two records collide on one id and the second entities.add() throws.
+  const xml = [
+    '<receptionReports currentSeconds="1">',
+    '<receptionReport receiverCallsign="A" receiverLocator="JO33ki" senderCallsign="B" senderLocator="FN20" frequency="14074000" flowStartSeconds="1788091549" mode="FT8" sNR="5" />',
+    '<receptionReport receiverCallsign="A" receiverLocator="JO33ki" senderCallsign="B" senderLocator="FN20" frequency="7074000" flowStartSeconds="1788091549" mode="FT8" sNR="-3" />',
+    '</receptionReports>',
+  ].join('');
+  const spots = parsePskReporterXml(xml);
+  assert.equal(spots.length, 2);
+  assert.notEqual(spots[0].id, spots[1].id, 'two bands of the same pair/window must not share an id');
+  assert.equal(new Set(spots.map((s) => s.id)).size, 2);
+});
+
 test('parsePskReporterXml: caps at 200 records even when the upstream sends more', () => {
   const reports = Array.from({ length: 250 }, (_, i) => (
     `<receptionReport receiverCallsign="R${i}" receiverLocator="JO33ki" senderCallsign="S${i}" senderLocator="FN20" frequency="14074000" flowStartSeconds="${i}" mode="FT8" sNR="0" />`

@@ -185,6 +185,48 @@ test('real ham radio propagation lifecycle: init/enable/update/disable/destroy',
   }
 });
 
+test('ham radio spots sharing sender/receiver/flowStartSeconds but differing in frequency both land, without entities.add() throwing on a duplicate id', async () => {
+  // Regression: the proxy has no band filter and FT8's decode windows are
+  // globally time-synchronized, so the same station pair decoded
+  // simultaneously on two bands is real, common upstream data. Before the
+  // fix, both spots synthesized the SAME id (frequency was omitted), and
+  // Cesium's entities.add() throws a DeveloperError on a duplicate id —
+  // which update()'s catch then swallowed and misreported as a network
+  // error, after removeAll() had already cleared the prior batch.
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createHamRadioPropagationLayer();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      spots: [
+        {
+          id: 'B-A-1788091549-14074000', senderCallsign: 'B', receiverCallsign: 'A',
+          senderLat: 40.5, senderLon: -75, receiverLat: 52.3, receiverLon: 4.9,
+          frequencyHz: 14074000, mode: 'FT8', snr: 5, flowStartSeconds: 1788091549,
+        },
+        {
+          id: 'B-A-1788091549-7074000', senderCallsign: 'B', receiverCallsign: 'A',
+          senderLat: 40.5, senderLon: -75, receiverLat: 52.3, receiverLon: 4.9,
+          frequencyHz: 7074000, mode: 'FT8', snr: -3, flowStartSeconds: 1788091549,
+        },
+      ],
+    }),
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    const ok = await layer.update(viewer);
+    assert.equal(ok, true, 'update() must not fail/throw on same-pair-different-band spots');
+    assert.equal(layer.getStats().error, null);
+    assert.equal(layer.getStats().count, 2, 'both bands must render as separate entities');
+    assert.equal(viewer._dataSources[0].entities.values.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
 test('ham radio spots missing an endpoint coordinate are skipped without crashing', async () => {
   const originalFetch = globalThis.fetch;
   const viewer = makeViewer();

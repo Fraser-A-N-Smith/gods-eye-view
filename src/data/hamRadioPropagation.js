@@ -167,8 +167,11 @@ export function createHamRadioPropagationLayer() {
               material: new Cesium.ColorMaterialProperty(style.color),
             },
             properties: {
-              // Analyst seam (additive): the proxy-assigned spot id.
-              spotId: spot.id ?? null,
+              // Analyst seam (additive): the SAME id used to build the
+              // rendered entity's id above (including the `spot-${count}`
+              // fallback), so getAnalystRecords() never reports a null id
+              // for a spot that clearly rendered under a real one.
+              spotId: stableId,
               senderCallsign: spot.senderCallsign ?? null,
               receiverCallsign: spot.receiverCallsign ?? null,
               senderLat,
