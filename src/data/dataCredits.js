@@ -147,6 +147,13 @@ export const DATA_CREDITS = [
       '(US public domain; major crossings only)',
   },
   {
+    key: 'cneos-fireball',
+    html:
+      'Fireball/bolide detections: ' +
+      '<a href="https://cneos.jpl.nasa.gov/fireballs/" target="_blank" rel="noopener">NASA/JPL CNEOS Fireball Data API</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +

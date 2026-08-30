@@ -53,6 +53,7 @@ How to read this:
 | **NOAA National Data Buoy Center** | Ocean buoy observations — wind, wave height, sea/air temperature | US public domain | "NOAA National Data Buoy Center" |
 | **PSKReporter** | Amateur (ham) radio propagation reception spots | Free public API; polled at most once per 5 minutes per PSKReporter's usage policy | "PSKReporter.info" |
 | **CBP Border Wait Times** | Estimated wait times at major US land border crossings (curated subset — CBP's API has no coordinates) | US public domain | "U.S. Customs and Border Protection" |
+| **NASA/JPL CNEOS Fireball API** | Recent fireball/bolide atmospheric detections | US public domain | "NASA/JPL CNEOS Fireball Data API" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 | **OpenStreetMap (Overpass API)** — power plants & hospitals | Critical infrastructure points, viewport-scoped | ODbL 1.0 (shares the existing Overpass/OSM credit) | "© OpenStreetMap contributors" |
 

@@ -282,6 +282,7 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'critical-infrastructure', token: '5', disposition: 'enabled-only' }),
   Object.freeze({ id: 'earthquakes', token: 'e', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fire-perimeters', token: 'p', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'fireballs', token: '7', disposition: 'enabled-only' }),
   Object.freeze({ id: 'flights', token: 'f', disposition: 'enabled+options', optionOwner: 'flights' }),
   Object.freeze({ id: 'gdelt-events', token: 'n', disposition: 'enabled-only' }),
   Object.freeze({ id: 'global-hazards', token: 'v', disposition: 'enabled-only' }),

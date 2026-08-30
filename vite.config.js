@@ -48,6 +48,7 @@ import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
+import { mapFireballRows } from './src/data/fireballsShape.js';
 import { mapOverpassElement } from './src/data/criticalInfrastructureShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
@@ -2864,6 +2865,143 @@ function borderWaitTimesProxy() {
 
   return {
     name: 'border-wait-times-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Fireballs proxy — NASA/JPL Center for Near-Earth Object Studies (CNEOS)
+ * fireball/bolide atmospheric detections, trailing 90 days.
+ *
+ * The upstream is keyless and public, but its response is a **fields+rows**
+ * shape (`{fields: [...], data: [[...], ...]}`), not an array of objects —
+ * and `lat`/`lon` are unsigned magnitudes with separate `lat-dir`/`lon-dir`
+ * sign columns that must be applied before the values mean anything. This
+ * proxy fetches it once, zips fields+rows and applies the sign server-side,
+ * and serves `{ fireballs: [...normalized...], retrievedAt }` so the browser
+ * never re-does that join against the raw feed.
+ *
+ * The `date-min` query param is computed FRESH on every upstream refresh
+ * (`new Date(Date.now() - 90*86400000)`), not baked into a module-level
+ * constant — a constant would freeze at server start and the rolling
+ * 90-day window would silently stop rolling.
+ *
+ * The mapping itself (`mapFireballRow`/`mapFireballRows`) lives in the
+ * Cesium-free `src/data/fireballsShape.js` (mirroring the existing
+ * `spaceWeatherShape.js`/`globalHazardsShape.js`/`volcanoesShape.js`/
+ * `oceanBuoysShape.js`/`hamRadioPropagationShape.js`/
+ * `criticalInfrastructureShape.js`/`borderWaitTimesShape.js` precedent) and
+ * is imported directly above — this proxy and the browser layer run the
+ * SAME mapping implementation, so there is nothing here to fall out of
+ * sync. `fireballsShape.test.mjs` covers the mapping contract once.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function fireballsProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const LIMIT = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'fireballs-v1.json');
+  const FIREBALL_URL = 'https://ssd-api.jpl.nasa.gov/fireball.api';
+  const ATTRIBUTION = 'NASA/JPL Center for Near-Earth Object Studies (US public domain)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[fireballs-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    // Computed fresh on every refresh, never baked into a module-level
+    // constant — see the module doc comment above.
+    const dateMin = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const url = `${FIREBALL_URL}?date-min=${dateMin}&limit=${LIMIT}`;
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const raw = JSON.parse(text);
+    const fireballs = mapFireballRows(
+      Array.isArray(raw?.fields) ? raw.fields : [],
+      Array.isArray(raw?.data) ? raw.data : [],
+    );
+
+    const body = JSON.stringify({
+      fireballs,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/fireballs', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'fireballs', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[fireballs-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Fireballs unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'fireballs-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9363,6 +9501,7 @@ export default defineConfig(({ mode }) => {
       oceanBuoysProxy(),
       hamRadioProxy(),
       borderWaitTimesProxy(),
+      fireballsProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),
