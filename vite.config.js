@@ -2075,6 +2075,14 @@ function spaceWeatherProxy() {
   const AURORA_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
   const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
   const NOAA_SCALES_URL = 'https://services.swpc.noaa.gov/products/noaa-scales.json';
+  // Real-time solar wind in-situ measurement (DSCOVR/ACE at L1), ~1-minute
+  // cadence — distinct from the discrete DONKI CME/flare event notifications
+  // above: this is continuous plasma/field measurement, not a notification.
+  const SOLAR_WIND_PLASMA_URL = 'https://services.swpc.noaa.gov/products/solar-wind/plasma-7-day.json';
+  const SOLAR_WIND_MAG_URL = 'https://services.swpc.noaa.gov/products/solar-wind/mag-7-day.json';
+  // JPL Sentry: standing asteroid impact-risk table (Palermo/Torino scale),
+  // distinct from NeoWs's today-only close-approach feed below.
+  const SENTRY_URL = 'https://ssd-api.jpl.nasa.gov/sentry.api';
   const ATTRIBUTION = 'NOAA / NWS Space Weather Prediction Center (US public domain)';
 
   // api.nasa.gov (DONKI, NeoWs, and the rest of the NASA-family APIs) accepts
@@ -2142,14 +2150,21 @@ function spaceWeatherProxy() {
     // The aurora grid is required; everything else is not. A missing Kp
     // degrades the readout to UNKNOWN rather than failing the whole layer,
     // because the oval is still worth drawing without it — and the same
-    // per-source null-safety extends to the three panel-only additions: a
-    // DONKI, NeoWs, or NOAA-scales outage empties/nulls only its own field.
-    const [auroraResult, kpResult, donkiResult, neoResult, scalesResult] = await Promise.allSettled([
+    // per-source null-safety extends to the panel-only additions: a DONKI,
+    // NeoWs, NOAA-scales, Sentry, or solar-wind (plasma/mag) outage
+    // empties/nulls only its own field.
+    const [
+      auroraResult, kpResult, donkiResult, neoResult, scalesResult,
+      sentryResult, plasmaResult, magResult,
+    ] = await Promise.allSettled([
       fetchJson(AURORA_URL),
       fetchJson(KP_URL),
       fetchJson(donkiUrl()),
       fetchJson(neoWsUrl()),
       fetchJson(NOAA_SCALES_URL),
+      fetchJson(SENTRY_URL),
+      fetchJson(SOLAR_WIND_PLASMA_URL),
+      fetchJson(SOLAR_WIND_MAG_URL),
     ]);
 
     // Merge (including the "aurora is required, everything else is
@@ -2158,7 +2173,10 @@ function spaceWeatherProxy() {
     // the independent-failure guarantee is directly unit-testable — see that
     // function's doc comment. A rejected aurora result throws out of the
     // call below, same as the inline check this replaced.
-    const merged = mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult });
+    const merged = mergeSpaceWeatherPayload({
+      auroraResult, kpResult, donkiResult, neoResult, scalesResult,
+      sentryResult, plasmaResult, magResult,
+    });
 
     const body = JSON.stringify({
       ...merged,

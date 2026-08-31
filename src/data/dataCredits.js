@@ -166,6 +166,13 @@ export const DATA_CREDITS = [
       '<a href="https://api.nasa.gov/" target="_blank" rel="noopener">NASA NeoWs — Near Earth Object Web Service</a>',
   },
   {
+    key: 'cneos-sentry',
+    html:
+      'Asteroid impact-risk table: ' +
+      '<a href="https://cneos.jpl.nasa.gov/sentry/" target="_blank" rel="noopener">NASA/JPL CNEOS Sentry System</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'austin-cctv',
     html:
       'CCTV cameras &amp; frames: City of Austin, TX — ' +
@@ -257,7 +264,7 @@ export const DATA_CREDITS = [
   {
     key: 'noaa-swpc',
     html:
-      'Space weather (aurora forecast, planetary K-index): NOAA / NWS Space Weather ' +
+      'Space weather (aurora forecast, planetary K-index, real-time solar wind): NOAA / NWS Space Weather ' +
       'Prediction Center (' +
       '<a href="https://www.swpc.noaa.gov" target="_blank" rel="noopener">swpc.noaa.gov</a>' +
       ', US public domain)',
