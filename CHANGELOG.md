@@ -3,6 +3,23 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (a)
+
+### Added
+
+- Added a "Geopolitical Events" globe layer (`gdelt-cameo-events`), backed by
+  GDELT's Event Database 2.0 — CAMEO-typed, actor/action-geocoded reported
+  events (unrest, conflict, diplomacy presets), distinct from the existing
+  "Global Reporting" mentions-only layer. `/api/gdelt/cameo-events` polls
+  GDELT's 15-minute bulk export feed and keeps a rolling ~3-hour buffer
+  rather than re-fetching a full day of history; a fresh server reads as
+  "warming up" instead of empty while it backfills. Every record carries an
+  explicit precision flag (country/region/locality) and is presented as a
+  reported event, never a confirmed incident.
+- The layer's theme switcher has a real, working chip row
+  (`getRowControls()`/`setParams`), which the existing mentions layer's own
+  preset switcher has never had wired up in the UI.
+
 ## [Unreleased] — 2026-08-30 (f)
 
 ### Added

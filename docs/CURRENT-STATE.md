@@ -1,6 +1,35 @@
 # God's Eye View Current State
 
-Updated: August 30, 2026
+Updated: August 31, 2026
+
+> **2026-08-31 — GDELT Event 2.0 "Geopolitical Events" layer**
+> (`src/data/gdeltCameoEvents.js`, `gdeltCameoEventsShape.js`,
+> `gdeltCameoEventsProxy` in `vite.config.js`). CAMEO-typed, actor/action-geocoded
+> reported events, distinct from the existing GEO 2.0 "Global Reporting"
+> mentions-only layer (`gdeltEvents.js`).
+>
+> **A dot here is a REPORTED EVENT, still not a confirmed incident.** Same
+> discipline as the mentions layer: these are machine-extracted from news
+> text by GDELT's own pipeline, not human-vetted. Every record also carries
+> an explicit `precision` (country/region/locality), derived from GDELT's own
+> geo-resolution type, so a country-level dot can never read as street-level.
+>
+> **The Event Database has no queryable API — it's bulk 15-minute exports.**
+> Unlike GEO 2.0, there is no per-theme REST endpoint upstream: GDELT
+> publishes a zipped, tab-delimited, headerless world CSV every 15 minutes.
+> Re-creating the mentions layer's 24h framing would mean re-downloading up
+> to 96 files, so the proxy instead keeps a ROLLING BUFFER: each poll fetches
+> only the newest interval (via `lastupdate.txt`), and a cold start backfills
+> a handful of recent intervals rather than a full day. `getStats().warming`
+> distinguishes "the buffer hasn't filled yet" from "nothing is happening" —
+> an empty result right after boot must never read as a quiet world.
+>
+> **The preset switcher actually has a UI, this time.** The existing mentions
+> layer's `getPresets()/setPreset()` has no chip row wired up anywhere in the
+> app. This layer implements the `enabled+options` contract
+> (`getParams`/`setParams`) plus `getRowControls()`, so its three themes
+> (unrest/conflict/diplomacy) are switchable from the toggle panel, not just
+> from a test file.
 
 > **2026-08-30 — photoreal source chain** (`src/photorealTileset.js`).
 > Startup no longer throws without a Google Maps key.

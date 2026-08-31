@@ -176,6 +176,12 @@ const LAYER_ALIASES = new Map([
   ['firms', 'local-firms'],
   ['fires', 'local-firms'],
   ['active fires', 'local-firms'],
+  ['global reporting', 'gdelt-events'],
+  ['news mentions', 'gdelt-events'],
+  ['media mentions', 'gdelt-events'],
+  ['geopolitical events', 'gdelt-cameo-events'],
+  ['conflict events', 'gdelt-cameo-events'],
+  ['cameo events', 'gdelt-cameo-events'],
 ]);
 
 const CITY_ALIASES = new Map([

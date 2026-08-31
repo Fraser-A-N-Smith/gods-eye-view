@@ -42,6 +42,18 @@ import {
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
+import { unzipSync, strFromU8 } from 'fflate';
+import {
+  resolveCameoPreset,
+  parseCameoExport,
+  parseLastUpdateText,
+  exportUrlForInterval,
+  previousIntervalId,
+  parseIntervalId,
+  pruneStaleIntervals,
+  mergeIntervalRecords,
+  sliceRecordsForPreset,
+} from './src/data/gdeltCameoEventsShape.js';
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
@@ -2034,6 +2046,247 @@ function gdeltEventsProxy() {
 
   return {
     name: 'gdelt-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * GDELT Event Database 2.0 — "Geopolitical Events" proxy.
+ *
+ * Unlike GEO 2.0 (a queryable REST API — see `gdeltEventsProxy` above), the
+ * real Event Database is published only as bulk 15-minute exports: a plain
+ * text `lastupdate.txt` pointer to a zipped, tab-delimited, headerless,
+ * whole-world CSV. There is no server-side event-type filter upstream.
+ *
+ * ## Rolling buffer, not re-fetched history
+ *
+ * Re-creating the GEO layer's 24h framing here would mean re-downloading up
+ * to 96 export files. Instead this proxy keeps a rolling few-hour buffer:
+ * each poll fetches only the LATEST interval (by comparing against
+ * `lastupdate.txt`), parses+filters it down to the CAMEO root codes any
+ * preset cares about, and appends it to an in-memory + disk-persisted
+ * buffer, evicting entries older than `BUFFER_WINDOW_MS`. A cold start
+ * (empty buffer) backfills a handful of recent intervals by walking
+ * `lastupdate.txt`'s timestamp backward, not the full window at once.
+ *
+ * ## The request surface is closed
+ *
+ * Same discipline as GEO 2.0: `?preset=<id>` only, resolved against the
+ * fixed `CAMEO_PRESETS` table. No caller text ever reaches GDELT.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function gdeltCameoEventsProxy() {
+  /** Rolling coverage window — deliberately not 24h; see module doc above. */
+  const BUFFER_WINDOW_MS = 3 * 60 * 60 * 1000;
+  /** Cold-start backfill depth (6 × 15 min = 90 min), not the full window at once. */
+  const BACKFILL_INTERVALS = 6;
+  /** Don't re-check lastupdate.txt more often than this. */
+  const POLL_STALE_MS = 7 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
+  const LASTUPDATE_MAX_BYTES = 8 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'gdelt-cameo');
+  const BUFFER_DISK_PATH = path.join(CACHE_DIR, 'buffer.json');
+  const ATTRIBUTION = 'The GDELT Project — Event Database 2.0';
+
+  /** @type {Array<{intervalId: string, intervalMs: number, records: Array<object>}>} */
+  let buffer = [];
+  let bufferLoaded = false;
+  let lastPolledAt = 0;
+  const inFlight = new Map();
+
+  async function loadDiskBuffer() {
+    if (bufferLoaded) return;
+    bufferLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(BUFFER_DISK_PATH, 'utf8'));
+      if (Array.isArray(parsed)) buffer = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskBuffer() {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(BUFFER_DISK_PATH, JSON.stringify(buffer), 'utf8');
+    } catch (error) {
+      console.warn(`[gdelt-cameo-proxy] buffer write failed: ${error?.message || error}`);
+    }
+  }
+
+  /** Same capped-read discipline as readResponseTextCapped, for a binary (ZIP) body. */
+  async function readResponseBufferCapped(response, maxBytes) {
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      const err = new Error('Upstream response too large');
+      err.code = 'RESPONSE_TOO_LARGE';
+      throw err;
+    }
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.byteLength > maxBytes) {
+        const err = new Error('Upstream response too large');
+        err.code = 'RESPONSE_TOO_LARGE';
+        throw err;
+      }
+      return buf;
+    }
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* no-op */ }
+        const err = new Error('Upstream response too large');
+        err.code = 'RESPONSE_TOO_LARGE';
+        throw err;
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /** Fetch, unzip, and parse one 15-minute interval's export file. */
+  async function fetchIntervalRecords(intervalId) {
+    const upstream = await fetch(exportUrlForInterval(intervalId), { signal: AbortSignal.timeout(25000) });
+    const zipBuffer = await readResponseBufferCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const unzipped = unzipSync(new Uint8Array(zipBuffer));
+    const [filename] = Object.keys(unzipped);
+    if (!filename) return [];
+    return parseCameoExport(strFromU8(unzipped[filename]));
+  }
+
+  /** Poll lastupdate.txt; append any new interval(s) to the buffer, evict stale ones. */
+  async function refreshBuffer() {
+    await loadDiskBuffer();
+    const lastUpdateRes = await fetch('https://data.gdeltproject.org/gdeltv2/lastupdate.txt', {
+      signal: AbortSignal.timeout(15000),
+    });
+    const lastUpdateText = await readResponseTextCapped(lastUpdateRes, LASTUPDATE_MAX_BYTES);
+    if (!lastUpdateRes.ok) {
+      const error = new Error(`lastupdate.txt HTTP ${lastUpdateRes.status}`);
+      error.upstreamStatus = lastUpdateRes.status;
+      throw error;
+    }
+    const pointer = parseLastUpdateText(lastUpdateText);
+    if (!pointer) throw new Error('lastupdate.txt did not name an export file');
+
+    const haveIds = new Set(buffer.map((entry) => entry.intervalId));
+    const idsToFetch = [];
+    if (buffer.length === 0) {
+      // Cold start: backfill a handful of recent intervals, not the whole window.
+      let cursor = pointer.intervalId;
+      for (let i = 0; i < BACKFILL_INTERVALS && cursor; i += 1) {
+        idsToFetch.unshift(cursor);
+        cursor = previousIntervalId(cursor);
+      }
+    } else if (!haveIds.has(pointer.intervalId)) {
+      idsToFetch.push(pointer.intervalId);
+    }
+
+    for (const intervalId of idsToFetch) {
+      if (haveIds.has(intervalId)) continue;
+      const intervalMs = parseIntervalId(intervalId);
+      if (!Number.isFinite(intervalMs)) continue;
+      try {
+        const records = await fetchIntervalRecords(intervalId);
+        buffer.push({ intervalId, intervalMs, records });
+        haveIds.add(intervalId);
+      } catch (error) {
+        // One bad interval (upstream hiccup, a truncated export) does not
+        // sink the whole poll — the buffer just stays a little thinner.
+        console.warn(`[gdelt-cameo-proxy] interval ${intervalId} fetch failed: ${error?.message || error}`);
+      }
+    }
+    buffer = pruneStaleIntervals(buffer, Date.now(), BUFFER_WINDOW_MS);
+    buffer.sort((a, b) => a.intervalMs - b.intervalMs);
+    void saveDiskBuffer();
+    return buffer;
+  }
+
+  /** Refresh at most once per POLL_STALE_MS; a failure keeps serving the existing buffer. */
+  async function ensureFreshBuffer() {
+    await loadDiskBuffer();
+    if (buffer.length > 0 && Date.now() - lastPolledAt < POLL_STALE_MS) return buffer;
+    const request = coalesceProxyRequest(inFlight, 'refresh', refreshBuffer);
+    try {
+      const result = await request.promise;
+      lastPolledAt = Date.now();
+      return result;
+    } catch (error) {
+      lastPolledAt = Date.now(); // don't hammer upstream on repeated failure
+      if (buffer.length === 0) throw error; // nothing to serve — surface the failure
+      if (!request.shared) {
+        console.warn(`[gdelt-cameo-proxy] refresh failed (${error?.message || error}) — serving existing buffer`);
+      }
+      return buffer;
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=180' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/gdelt/cameo-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveCameoPreset(requested);
+      if (!preset) {
+        send(res, 400, JSON.stringify({ error: 'Unknown event preset' }), 'NONE');
+        return;
+      }
+
+      try {
+        const currentBuffer = await ensureFreshBuffer();
+        const merged = mergeIntervalRecords(currentBuffer);
+        const sliced = sliceRecordsForPreset(merged, preset.id, { maxRecords: 750 });
+        const intervalTimes = currentBuffer.map((entry) => entry.intervalMs).filter(Number.isFinite);
+        const oldestMs = intervalTimes.length ? Math.min(...intervalTimes) : null;
+        const newestMs = intervalTimes.length ? Math.max(...intervalTimes) : null;
+        const warming = Boolean(oldestMs !== null && newestMs !== null && (newestMs - oldestMs) < BUFFER_WINDOW_MS * 0.5);
+        const body = JSON.stringify({
+          preset: preset.id,
+          label: preset.label,
+          records: sliced.records,
+          truncated: sliced.truncated,
+          totalFeatures: sliced.totalFeatures,
+          warming,
+          bufferWindowMs: BUFFER_WINDOW_MS,
+          oldestBufferedMs: oldestMs,
+          attribution: ATTRIBUTION,
+          fetchedAt: Date.now(),
+        });
+        send(res, 200, body, 'HIT');
+      } catch (error) {
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'GDELT Event Database unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'gdelt-cameo-events-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9523,6 +9776,7 @@ export default defineConfig(({ mode }) => {
       firmsProxy(),
       firePerimetersProxy(),
       gdeltEventsProxy(),
+      gdeltCameoEventsProxy(),
       spaceWeatherProxy(),
       globalHazardsProxy(),
       volcanoesProxy(),

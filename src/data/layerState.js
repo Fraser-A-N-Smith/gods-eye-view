@@ -223,6 +223,13 @@ const OPTION_GROUPS = Object.freeze({
     booleanOption('showProjection', 'p', true),
     booleanOption('autoHop', 'a', false),
   ]),
+  'gdelt-cameo-events': Object.freeze([
+    enumOption('preset', 'p', 'unrest', ['unrest', 'conflict', 'diplomacy'], {
+      unrest: 'u',
+      conflict: 'c',
+      diplomacy: 'd',
+    }),
+  ]),
   radio: Object.freeze([
     Object.freeze({
       key: 'filter',
@@ -284,6 +291,9 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'fire-perimeters', token: 'p', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fireballs', token: '7', disposition: 'enabled-only' }),
   Object.freeze({ id: 'flights', token: 'f', disposition: 'enabled+options', optionOwner: 'flights' }),
+  Object.freeze({
+    id: 'gdelt-cameo-events', token: '8', disposition: 'enabled+options', optionOwner: 'gdelt-cameo-events',
+  }),
   Object.freeze({ id: 'gdelt-events', token: 'n', disposition: 'enabled-only' }),
   Object.freeze({ id: 'global-hazards', token: 'v', disposition: 'enabled-only' }),
   Object.freeze({ id: 'ham-radio-propagation', token: '4', disposition: 'enabled-only' }),

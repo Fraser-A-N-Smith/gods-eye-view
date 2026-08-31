@@ -109,6 +109,13 @@ export const DATA_CREDITS = [
       '(location-matched article links; publisher terms apply)',
   },
   {
+    key: 'gdelt-cameo-events',
+    html:
+      'Geopolitical Events (CAMEO-typed, rolling buffer): ' +
+      '<a href="https://www.gdeltproject.org/about.html" target="_blank" rel="noopener">GDELT Project — Event Database 2.0</a> ' +
+      '(reported events, not confirmed incidents)',
+  },
+  {
     key: 'gdacs',
     html:
       'Global hazard alerts (floods, droughts): ' +

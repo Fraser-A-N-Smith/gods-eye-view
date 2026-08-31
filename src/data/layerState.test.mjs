@@ -31,6 +31,7 @@ function paramsForLayer(id) {
     return { models3d: false, models3dMode: 'proximity', irBoost: true };
   }
   if (id === 'satellites') return { catalog: 'core', showPoints: false, showOrbits: false };
+  if (id === 'gdelt-cameo-events') return { preset: 'unrest' };
   if (id === 'cctv') {
     return {
       coverageMode: 'on',
@@ -168,8 +169,8 @@ function unregisteredToken() {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  assert.equal(REGISTERED_LAYER_IDS.length, 33);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 33);
+  assert.equal(REGISTERED_LAYER_IDS.length, 34);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 34);
   assert.deepEqual(REGISTERED_LAYER_IDS, [...REGISTERED_LAYER_IDS].sort());
   assert.throws(
     () => validateLayerStateRegistry([...LAYER_STATE_REGISTRY, LAYER_STATE_REGISTRY[0]]),
