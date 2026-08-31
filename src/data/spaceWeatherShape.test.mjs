@@ -16,6 +16,7 @@ import {
   parseSentryRiskList,
   parseSolarWindNow,
   mergeSpaceWeatherPayload,
+  spaceWeatherEnrichmentLabel,
 } from './spaceWeatherShape.js';
 
 test('Kp bands are ordered, distinct, and each names an operational effect', () => {
@@ -618,4 +619,64 @@ test('omitting the three new result params entirely (call-site not yet upgraded)
   });
   assert.deepEqual(merged.impactRiskObjects, []);
   assert.equal(merged.solarWindNow, null);
+});
+
+// spaceWeatherEnrichmentLabel is the ONLY place solarEvents/closeApproaches/
+// radioBlackoutScale become text a user can read (see its doc comment for
+// why). These pin the actual reachable content, not just that the fields
+// survive `getStats()`.
+test('an empty enrichment renders an empty label, not a placeholder', () => {
+  assert.equal(spaceWeatherEnrichmentLabel(), '');
+  assert.equal(spaceWeatherEnrichmentLabel({ solarEvents: [], closeApproaches: [], radioBlackoutScale: null }), '');
+});
+
+test('a "0" (no blackout) reading is a real observation but earns no status clause', () => {
+  assert.equal(
+    spaceWeatherEnrichmentLabel({ radioBlackoutScale: { scale: '0', text: 'none' } }),
+    '',
+  );
+});
+
+test('a nonzero radio-blackout scale renders as R<n> BLACKOUT', () => {
+  assert.equal(
+    spaceWeatherEnrichmentLabel({ radioBlackoutScale: { scale: '2', text: 'Moderate' } }),
+    'R2 BLACKOUT',
+  );
+});
+
+test('solar events render as a count, singular and plural', () => {
+  assert.equal(
+    spaceWeatherEnrichmentLabel({ solarEvents: [{ id: 'a' }] }),
+    '1 SOLAR EVENT',
+  );
+  assert.equal(
+    spaceWeatherEnrichmentLabel({ solarEvents: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }),
+    '3 SOLAR EVENTS',
+  );
+});
+
+test('the closest approach renders in lunar distances, not raw kilometers', () => {
+  const label = spaceWeatherEnrichmentLabel({
+    closeApproaches: [
+      { id: '1', name: '(2026 BB2)', missDistanceKm: 384_400 },
+      { id: '2', name: 'FARTHER', missDistanceKm: 5_000_000 },
+    ],
+  });
+  assert.equal(label, 'NEO (2026 BB2) · 1.0 LD');
+});
+
+test('all three clauses join in a fixed order and skip whatever has nothing to report', () => {
+  const label = spaceWeatherEnrichmentLabel({
+    radioBlackoutScale: { scale: '3', text: 'Strong' },
+    solarEvents: [{ id: 'a' }, { id: 'b' }],
+    closeApproaches: [{ id: '1', name: 'ROCK', missDistanceKm: 768_800 }],
+  });
+  assert.equal(label, 'R3 BLACKOUT · 2 SOLAR EVENTS · NEO ROCK · 2.0 LD');
+});
+
+test('a non-finite miss distance is skipped rather than rendering NEO undefined LD', () => {
+  const label = spaceWeatherEnrichmentLabel({
+    closeApproaches: [{ id: '1', name: 'BAD', missDistanceKm: NaN }],
+  });
+  assert.equal(label, '');
 });

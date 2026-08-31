@@ -19,7 +19,7 @@ test('mapFireballRow: applies S/W sign to unsigned lat/lon magnitudes', () => {
   assert.equal(r.velocityKmS, null);
 });
 
-test('mapFireballRow: N/E stays positive', () => {
+test('mapFireballRow: S/E applies the sign to latitude only', () => {
   const row = ['2026-08-01 17:43:48', '2.9', '0.1', '19.5', 'S', '176.2', 'E', '45.0', null];
   const r = mapFireballRow(FIELDS, row);
   assert.equal(r.lat, -19.5);
@@ -35,6 +35,18 @@ test('mapFireballRow: null numeric fields stay null, never NaN', () => {
   const r = mapFireballRow(FIELDS, row);
   for (const v of Object.values(r)) assert.notEqual(v, undefined);
   if (typeof r.velocityKmS === 'number') assert.ok(Number.isFinite(r.velocityKmS));
+});
+
+test('mapFireballRow: an empty-string numeric field is null, not zero', () => {
+  // The bug numeric.js exists to prevent: a local `num()` here used to do
+  // `Number.isFinite(Number(v))`, and `Number('') === 0`, so a blank
+  // upstream field reported an energy/altitude/velocity of exactly zero
+  // instead of "not reported". Now routed through finiteOrNull.
+  const row = ['2026-08-14 07:48:36', '', '0.13', '47.7', 'N', '119.4', 'W', '', ''];
+  const r = mapFireballRow(FIELDS, row);
+  assert.equal(r.energyKt, null);
+  assert.equal(r.altitudeKm, null);
+  assert.equal(r.velocityKmS, null);
 });
 
 test('mapFireballRow: non-array fields or row returns null', () => {

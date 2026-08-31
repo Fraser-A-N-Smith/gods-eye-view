@@ -239,6 +239,38 @@ test('an array solarWindNow on the wire is rejected too — typeof [] === "objec
   assert.equal(layer.getStats().solarWindNow, null);
 });
 
+test('the DONKI/NeoWs/NOAA-scales enrichments reach getStats().loadingLabel — the field the toggle panel actually renders', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [],
+        kpAvailable: false,
+        solarEvents: [{ id: 'evt-1', type: 'CME', issuedMs: 1, summary: 'x', url: null }],
+        closeApproaches: [
+          { id: '1', name: '(2026 BB2)', missDistanceKm: 384_400, velocityKmS: 1, diameterMinM: 1, diameterMaxM: 2, hazardous: false, closeApproachMs: 1 },
+        ],
+        radioBlackoutScale: { scale: '1', text: 'Minor' },
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const { loadingLabel } = layer.getStats();
+  assert.match(loadingLabel, /R1 BLACKOUT/);
+  assert.match(loadingLabel, /1 SOLAR EVENT\b/);
+  assert.match(loadingLabel, /NEO \(2026 BB2\) · 1\.0 LD/);
+});
+
+test('an empty enrichment leaves loadingLabel empty rather than a placeholder', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({ ok: true, json: async () => ({ aurora: [], kpAvailable: false }) }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  assert.equal(layer.getStats().loadingLabel, '');
+});
+
 test('HTTP, malformed, and network failures each degrade honestly', async () => {
   const http = createSpaceWeatherLayer({ fetchImpl: async () => ({ ok: false, status: 500 }) });
   http.enable();

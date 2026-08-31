@@ -20,7 +20,7 @@
 
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
-import { classifyKp, auroraStyle } from './spaceWeatherShape.js';
+import { classifyKp, auroraStyle, spaceWeatherEnrichmentLabel } from './spaceWeatherShape.js';
 
 const API_URL = '/api/space-weather';
 
@@ -234,6 +234,10 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
         kp: state.kp,
         coverage: 'GLOBAL · OVATION FORECAST',
         status: spaceWeatherStatusText(state),
+        // Rendered by DataLayerManager._buildMetaText as the toggle-panel
+        // meta line — see spaceWeatherEnrichmentLabel's own doc comment for
+        // why this is the field that actually reaches the screen.
+        loadingLabel: spaceWeatherEnrichmentLabel(state),
         // Panel enrichments — never undefined, same discipline as the fields
         // above (see the `state` initializer for why: NeoWs bodies have no
         // Earth surface coordinate, so this is their only presentation).

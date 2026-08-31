@@ -50,6 +50,15 @@ test('mapOverpassElement: element with neither tag matches returns null', () => 
   assert.equal(mapOverpassElement({ type: 'node', id: 6, lat: 0, lon: 0, tags: { shop: 'bakery' } }), null);
 });
 
+test('mapOverpassElement: an element missing type or id returns null rather than an "undefined/undefined" id', () => {
+  // With entity-id deduplication in play (entityDedupe.js), two elements
+  // both missing type/id would otherwise collide on the literal string
+  // "undefined/undefined" instead of being dropped individually.
+  assert.equal(mapOverpassElement({ id: 1, lat: 0, lon: 0, tags: { power: 'plant' } }), null, 'missing type');
+  assert.equal(mapOverpassElement({ type: 'node', lat: 0, lon: 0, tags: { power: 'plant' } }), null, 'missing id');
+  assert.equal(mapOverpassElement({ type: 'node', id: 0, lat: 0, lon: 0, tags: { power: 'plant' } })?.id, 'node/0', 'id 0 is a real id, not "missing"');
+});
+
 test('mapOverpassElement: absent tags object is handled without throwing', () => {
   assert.equal(mapOverpassElement({ type: 'node', id: 7, lat: 0, lon: 0 }), null);
   assert.equal(mapOverpassElement(null), null);

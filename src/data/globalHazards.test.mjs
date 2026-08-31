@@ -179,3 +179,72 @@ test('global hazards refresh reports failure and clears it only after a successf
     layer.destroy(viewer);
   }
 });
+
+test('global hazards refresh rejects a malformed payload without throwing', async () => {
+  const originalFetch = globalThis.fetch;
+  const dataSources = [];
+  const viewer = {
+    dataSources: {
+      add(dataSource) { dataSources.push(dataSource); return dataSource; },
+      remove() { return true; },
+    },
+  };
+  const layer = createGlobalHazardsLayer();
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ notHazards: [] }) });
+    assert.equal(await layer.update(viewer), false);
+    assert.equal(layer.getStats().error, 'Malformed global hazards response');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('two GDACS episodes of the same event (episodeid dropped from the id) do not crash the layer', async () => {
+  // gdacs:${eventtype}:${eventid} ignores episodeid, so two episodes of one
+  // GDACS event collide on id. EntityCollection.add throws synchronously on
+  // a duplicate id; before addUniqueEntity, that throw was caught by
+  // update()'s broad catch and misreported as a generic network error,
+  // leaving entities half-populated (or stuck on the previous refresh).
+  const originalFetch = globalThis.fetch;
+  const dataSources = [];
+  const viewer = {
+    dataSources: {
+      add(dataSource) { dataSources.push(dataSource); return dataSource; },
+      remove() { return true; },
+    },
+  };
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      hazards: [
+        {
+          id: 'gdacs:FL:1', source: 'GDACS', kind: 'FL', title: 'Flood — episode 1',
+          lat: 12.34, lon: 56.78, severity: 'Orange', url: null, dateMs: 1_753_600_000_000,
+        },
+        {
+          // Same eventtype/eventid, a later episode — collides on id because
+          // episodeid is not part of it.
+          id: 'gdacs:FL:1', source: 'GDACS', kind: 'FL', title: 'Flood — episode 2',
+          lat: 12.34, lon: 56.78, severity: 'Red', url: null, dateMs: 1_753_600_500_000,
+        },
+      ],
+      retrievedAt: Date.now(),
+    }),
+  });
+  const layer = createGlobalHazardsLayer();
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    assert.equal(await layer.update(viewer), true, 'a duplicate id must not fail the whole refresh');
+    assert.equal(layer.getStats().error, null);
+    assert.equal(dataSources[0].entities.values.length, 1, 'only the first episode is rendered');
+    assert.equal(layer.getStats().count, 1);
+    assert.equal(layer.getStats().duplicatesSkipped, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});

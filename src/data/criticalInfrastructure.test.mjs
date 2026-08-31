@@ -273,11 +273,17 @@ test('zoom-out (no bounded viewport) reports zoom-in guidance without fetching',
     elements: [{ id: 'node/1', kind: 'power-plant', name: 'Plant', lat: 30.5, lon: -97.5 }],
   });
   try {
+    assert.equal(harness.entities().length, 1, 'setup loaded one pin from the bounded viewport');
     // Force a global/unbounded view.
     harness.viewer.camera.computeViewRectangle = () => null;
     await criticalInfrastructureLayer.update();
     assert.equal(harness.requests.length, 1, 'no additional fetch was made for the unbounded view');
     assert.equal(harness.stats().status, 'zoom-in');
+    // The bug: a zoom-out returned early without clearing rendered pins or
+    // state.records, so pins from whatever viewport was last loaded stayed
+    // welded to the globe while the panel said "Zoom in to load".
+    assert.equal(harness.entities().length, 0, 'pins from the last loaded viewport must not survive a zoom-out');
+    assert.deepEqual(harness.analystRecords(), [], 'stale records must not survive a zoom-out either');
   } finally {
     harness.restore();
   }

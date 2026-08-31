@@ -24,6 +24,8 @@
  * here as the shared contract those two settings jointly satisfy.
  */
 
+import { finiteOrNull, textOrNull } from './numeric.js';
+
 /** 4, 6, or 8-character Maidenhead grid locator grammar. */
 const MAIDENHEAD_RE = /^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?([0-9]{2})?$/;
 
@@ -71,17 +73,6 @@ const REPORT_TAG_RE = /<receptionReport\b([^>]*)\/?>/g;
 function attr(attrsText, name) {
   const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrsText);
   return match ? match[1] : null;
-}
-
-function finiteOrNull(value) {
-  if (value === null || value === undefined || String(value).trim() === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function textOrNull(value) {
-  const t = String(value ?? '').trim();
-  return t || null;
 }
 
 /**
