@@ -1614,6 +1614,117 @@ function celestrakProxy() {
   };
 }
 
+/**
+ * ISS crew roster proxy — Open Notify `astros.json`.
+ *
+ * Upstream is HTTP-only (no TLS), so it is fetched server-side only and
+ * re-served over this app's own HTTPS origin (never called directly from the
+ * browser). Crew rotations happen every few weeks/months, so this caches for
+ * an hour; a stale roster beats a blank one, and a total upstream miss with
+ * no cache at all serves an empty crew list rather than a 5xx — this is a
+ * nice-to-have enrichment for the Satellites panel, not core catalog data,
+ * and must never fail the layer's init.
+ * @returns {import('vite').Plugin}
+ */
+function issCrewProxy() {
+  const TTL_MS = 60 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 256 * 1024;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'iss-crew-v1.json');
+  const ASTROS_URL = 'http://api.open-notify.org/astros.json';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[iss-crew-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=300' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(ASTROS_URL, { signal: AbortSignal.timeout(15000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const people = Array.isArray(parsed?.people) ? parsed.people : [];
+    const crew = people
+      .filter((person) => person?.craft === 'ISS')
+      .map((person) => ({ name: String(person.name || '').trim(), craft: 'ISS' }))
+      .filter((person) => person.name);
+
+    const body = JSON.stringify({ crew, retrievedAt: Date.now() });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/iss-crew', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'iss-crew', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[iss-crew-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        // No cache at all — a blank crew roster is a valid, safe fallback.
+        if (!request.shared) {
+          console.warn(`[iss-crew-proxy] refresh failed (${error?.message || error}) — no cache, serving empty roster`);
+        }
+        send(res, 200, JSON.stringify({ crew: [], retrievedAt: null }), 'NONE');
+      }
+    });
+  }
+
+  return {
+    name: 'iss-crew-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
 export const LL2_CACHE_TTL_MS = 15 * 60_000;
 
 /** Build LL2 request headers without exposing its optional token client-side. */
@@ -9519,6 +9630,7 @@ export default defineConfig(({ mode }) => {
       cesium(),
       openSkyProxy(),
       celestrakProxy(),
+      issCrewProxy(),
       tomtomProxy(),
       firmsProxy(),
       firePerimetersProxy(),

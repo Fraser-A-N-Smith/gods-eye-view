@@ -36,8 +36,8 @@ import { isExplicitLayerStateOrigin } from './layerState.js';
 /**
  * Satellite Orbits — Real-time positions via CelesTrak TLE + SGP4 propagation.
  *
- * Loads six CelesTrak groups (~840 sats): stations, visual, GPS, GLONASS,
- * Galileo, and the geosynchronous belt. Optional dense mode (setParams
+ * Loads seven CelesTrak groups (~880 sats): stations, visual, GPS, GLONASS,
+ * Galileo, BeiDou, and the geosynchronous belt. Optional dense mode (setParams
  * catalog:'dense') adds the Starlink shell as points-only extras.
  * Renders positions via PointPrimitiveCollection, orbital paths as polylines.
  * Click any satellite to track it with camera follow + orbital path.
@@ -77,6 +77,7 @@ const CATALOG_GROUPS = [
   { tag: 'gps-ops', path: 'gps-ops' },
   { tag: 'glonass', path: 'glo-ops' },
   { tag: 'galileo', path: 'galileo' },
+  { tag: 'beidou', path: 'beidou' },
   { tag: 'geo', path: 'geo' },
 ];
 
@@ -155,6 +156,12 @@ const POINT_STYLES = {
     outlineColor: POINT_OUTLINE,
     outlineWidth: 0,
   },
+  beidou: {
+    pixelSize: 6,
+    color: _classColor('beidou'),
+    outlineColor: POINT_OUTLINE,
+    outlineWidth: 0,
+  },
   geo: {
     pixelSize: 5,
     color: _classColor('geo'),
@@ -194,6 +201,19 @@ let _detectionObjects = new Map();
 let _orbitPaths = new Map();
 let _count = 0;
 let _lastUpdate = null;
+/**
+ * ISS crew roster (Open Notify `astros.json`, proxied through `/api/iss-crew`).
+ * Refreshed at most once an hour — crew rotations happen on a weeks/months
+ * cadence, so there is nothing to gain from polling this on the 5-minute
+ * catalog refresh. A failed fetch keeps the last good roster; the array
+ * starts empty and only ever holds `{ name, craft: 'ISS' }` entries.
+ * @type {Array<{name: string, craft: string}>}
+ */
+let _issCrew = [];
+let _issCrewFetchedAtMs = 0;
+/** @type {Promise<void>|null} In-flight ISS crew fetch (dedupe concurrent triggers). */
+let _issCrewFetchPromise = null;
+const ISS_CREW_REFRESH_MS = 60 * 60 * 1000;
 /** @type {string|null} Surfaced feed error (e.g. CelesTrak outage) for the layer chip. */
 let _lastError = null;
 const _activeUpdateControllers = new Set();
@@ -940,6 +960,11 @@ function _updateTrackedSatelliteLabelModel(fallbackAltitudeM = null) {
     const extra = companions.length - 1;
     details.push(`DOCKED · ${companions[0]}${extra > 0 ? ` · +${extra}` : ''}`);
   }
+  // Crew roster (Open Notify) only ever applies to the ISS itself — a docked
+  // Soyuz/Dragon does not carry its own separate roster in this data.
+  if (_trackedNorad === ISS_NORAD && _issCrew.length > 0) {
+    details.push(`CREW · ${_issCrew.length} ABOARD`);
+  }
   const current = _trackedEntity.gevLabelModel;
   // Compare the WHOLE detail array: comparing only `details[0]` swallowed any
   // change confined to the companions line, so the card would never republish.
@@ -1072,6 +1097,25 @@ function _propagateDenseChunk() {
       point.position = Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude);
     }
   }
+}
+
+/**
+ * Refresh the ISS crew roster at most once per ISS_CREW_REFRESH_MS. Fire-and-
+ * forget: a failed or slow fetch must never hold up the satellite catalog
+ * rebuild that calls this, and the last good roster is kept on failure.
+ * @param {AbortSignal|null} [signal] Aborts alongside the in-flight catalog update.
+ */
+function _refreshIssCrew(signal = null) {
+  const now = Date.now();
+  if (_issCrewFetchPromise || now - _issCrewFetchedAtMs < ISS_CREW_REFRESH_MS) return;
+  _issCrewFetchedAtMs = now;
+  _issCrewFetchPromise = fetch('/api/iss-crew', { signal })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (Array.isArray(data?.crew)) _issCrew = data.crew;
+    })
+    .catch(() => { /* keep the last good roster */ })
+    .finally(() => { _issCrewFetchPromise = null; });
 }
 
 /**
@@ -1374,6 +1418,23 @@ export function _clearDenseCatalogStateForTest() {
   _params = { catalog: 'core', showPoints: true, showOrbits: true };
   _cancelPendingTrackingRestore();
   _enabled = false;
+}
+
+/** Reset ISS crew fetch state so it cannot leak between tests. */
+export function _clearIssCrewStateForTest() {
+  _issCrew = [];
+  _issCrewFetchedAtMs = 0;
+  _issCrewFetchPromise = null;
+}
+
+/**
+ * The in-flight ISS crew fetch promise, if any — lets a test await the
+ * fire-and-forget `_refreshIssCrew` call deterministically instead of
+ * guessing how many microtask ticks its `fetch().then().then()` chain needs.
+ * @returns {Promise<void>|null}
+ */
+export function _pendingIssCrewFetchForTest() {
+  return _issCrewFetchPromise;
 }
 
 /** Catalog group tag recorded for a satellite, for ingestion-path assertions. */
@@ -1740,6 +1801,7 @@ const satellitesLayer = {
         if (issPath) issPath.primitive.show = _params.showOrbits;
 
         _syncIssOverlay();
+        _refreshIssCrew(updateSignal);
       }
 
       _count = _points.size;
@@ -1819,6 +1881,9 @@ const satellitesLayer = {
     _count = 0;
     _lastUpdate = null;
     _lastError = null;
+    _issCrew = [];
+    _issCrewFetchedAtMs = 0;
+    _issCrewFetchPromise = null;
     _lastFocusUpdate = 0;
     _activeFocusCount = 0;
     _trackingRefreshEpoch += 1;
@@ -2183,6 +2248,7 @@ const satellitesLayer = {
         ? 'unavailable'
         : (_lastError ? 'degraded' : 'nominal'),
       error: _lastError,
+      issCrew: _issCrew.slice(),
     };
   },
 };

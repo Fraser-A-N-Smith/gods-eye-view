@@ -56,6 +56,12 @@ export const DATA_CREDITS = [
       'Dr. T.S. Kelso',
   },
   {
+    key: 'open-notify',
+    html:
+      'ISS crew roster: ' +
+      '<a href="http://open-notify.org" target="_blank" rel="noopener">Open Notify</a>',
+  },
+  {
     key: 'launch-library-2',
     html:
       'Space mission launch, payload &amp; recovery metadata: ' +
