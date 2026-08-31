@@ -2,9 +2,10 @@
  * @module data/rasterOverlays
  * @description Independently toggleable open-data raster overlays.
  *
- * Two transparent tile layers composited onto the Cesium globe as
+ * Three transparent tile layers composited onto the Cesium globe as
  * `Cesium.ImageryLayer`s: OpenSeaMap sea marks (buoys, beacons, lighthouses,
- * harbours) and OpenSnowMap ski pistes. Both are keyless, ODbL-derived, and
+ * harbours), OpenSnowMap ski pistes, and OpenRailwayMap rail tracks (tracks,
+ * stations, electrification). All three are keyless, ODbL-derived, and
  * render above whichever base imagery stack is active.
  *
  * ## They only appear on a globe-imagery stack, and the layer says so
@@ -21,15 +22,15 @@
  * no reload, because the imagery layer was there the whole time.
  *
  * (This is the same constraint that made GIBS and Copernicus map STACKS rather
- * than overlays. These two are genuinely overlays — they are transparent and
+ * than overlays. These three are genuinely overlays — they are transparent and
  * meant to composite — so they take the constraint instead of dodging it.)
  *
  * ## Politeness
  *
- * Both are volunteer-run community tile servers with no CDN behind them and no
- * commercial backing. Each descriptor caps its zoom at the depth the source
- * actually renders, so panning past it cannot turn into a 404 storm against a
- * hobby server.
+ * All three are volunteer-run community tile servers with no CDN behind them
+ * and no commercial backing. Each descriptor caps its zoom at the depth the
+ * source actually renders, so panning past it cannot turn into a 404 storm
+ * against a hobby server.
  *
  * ## Not suppressed during timeline replay
  *
@@ -80,6 +81,26 @@ export const RASTER_OVERLAYS = Object.freeze([
     credit: '© OpenSnowMap.org · © OpenStreetMap contributors (ODbL)',
     coverage: 'PISTES · LIFTS · NORDIC TRAILS',
     homepage: 'https://www.opensnowmap.org',
+  }),
+  Object.freeze({
+    id: 'openrailwaymap-tracks',
+    name: 'Rail Network',
+    icon: '🚆',
+    source: 'OpenRailwayMap',
+    token: '0',
+    url: 'https://a.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+    // Conservative bounds matching this file's other two hobby-server
+    // overlays (z9/z18 seamarks, z8/z18 pistes) rather than the style's full
+    // documented range — this sandboxed environment's network egress policy
+    // could not reach tiles.openrailwaymap.org to confirm the exact edges
+    // live, so these are picked to be safely inside the server's real
+    // coverage rather than pushed to it. Re-verify against the live tile
+    // server before relying on either edge.
+    maximumLevel: 18,
+    minimumLevel: 8,
+    credit: '© OpenRailwayMap contributors (ODbL) · © OpenStreetMap contributors',
+    coverage: 'TRACKS · STATIONS · ELECTRIFICATION',
+    homepage: 'https://www.openrailwaymap.org',
   }),
 ]);
 
