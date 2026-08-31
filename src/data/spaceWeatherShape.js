@@ -336,3 +336,56 @@ export function auroraStyle(probability) {
     pixelSize: Math.round(3 + scaled * 6),
   };
 }
+
+/** 1 lunar distance in km — the unit close-approach reporting conventionally uses. */
+const LUNAR_DISTANCE_KM = 384_400;
+
+/**
+ * Terse one-line summary of the DONKI/NeoWs/NOAA-scales panel enrichments.
+ *
+ * This is the ONLY place these three fields turn into text a user can read:
+ * `DataLayerManager._buildMetaText` (src/data/manager.js) renders
+ * `stats.loadingLabel` verbatim in the toggle-panel meta row, the same
+ * surface `traffic.js` and `firmsHeatmap.js` already use for layer-specific
+ * detail beyond the generic "source · last-updated" line. Nothing else in
+ * the app reads `solarEvents`/`closeApproaches`/`radioBlackoutScale`, so a
+ * clause dropped here is a clause nobody ever sees.
+ *
+ * Each clause is independently optional — a quiet sun with a "0"/none
+ * blackout scale and no logged approach legitimately renders an empty
+ * string, and callers show their normal fallback (source · age) then.
+ *
+ * @param {object} [enrichment]
+ * @param {Array<object>} [enrichment.solarEvents]
+ * @param {Array<{name:string, missDistanceKm:number}>} [enrichment.closeApproaches]
+ * @param {{scale:string|null, text:string|null}|null} [enrichment.radioBlackoutScale]
+ * @returns {string}
+ */
+export function spaceWeatherEnrichmentLabel({
+  solarEvents = [],
+  closeApproaches = [],
+  radioBlackoutScale = null,
+} = {}) {
+  const parts = [];
+
+  // "0" is NOAA's own "no blackout" reading — a real observation, not an
+  // absence, but not something worth a status line either.
+  const scale = radioBlackoutScale?.scale;
+  if (scale && scale !== '0') parts.push(`R${scale} BLACKOUT`);
+
+  if (Array.isArray(solarEvents) && solarEvents.length > 0) {
+    parts.push(`${solarEvents.length} SOLAR EVENT${solarEvents.length === 1 ? '' : 'S'}`);
+  }
+
+  // Closest first is `parseNeoFeed`'s own sort contract, so [0] is the
+  // interesting one — the "close approach" this panel is named after.
+  const closest = Array.isArray(closeApproaches) ? closeApproaches[0] : null;
+  const missDistanceKm = finiteOrNull(closest?.missDistanceKm);
+  if (closest && missDistanceKm !== null) {
+    const ld = missDistanceKm / LUNAR_DISTANCE_KM;
+    const name = textOrNull(closest.name) || 'NEO';
+    parts.push(`NEO ${name} · ${ld.toFixed(1)} LD`);
+  }
+
+  return parts.join(' · ');
+}

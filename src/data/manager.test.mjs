@@ -16,6 +16,7 @@ import {
   contextSnapshotLayerIds,
   shouldCaptureContextSession,
 } from '../contextModePolicy.js';
+import { createSpaceWeatherLayer } from './spaceWeather.js';
 
 /** Build a mock layer whose init/update resolve on the next microtask, so a
  *  second toggle can land while the first is awaiting. */
@@ -1856,6 +1857,38 @@ test('layer metadata names degraded state instead of presenting an ordinary age'
       lastUpdate: 1,
     },
   }), 'UNAVAILABLE · CelesTrak · CelesTrak unreachable');
+});
+
+test('space weather DONKI/NeoWs/NOAA-scales enrichments actually reach the rendered meta line', async () => {
+  // The bug: getStats() carried solarEvents/closeApproaches/radioBlackoutScale
+  // but nothing read them, so three upstream fetches were shipped to the
+  // browser and dropped on the floor. This proves the round trip through the
+  // exact function the toggle panel calls to paint each layer's row.
+  const mgr = new DataLayerManager({});
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [],
+        kpAvailable: false,
+        solarEvents: [
+          { id: 'evt-1', type: 'CME', issuedMs: 1, summary: 'x', url: null },
+          { id: 'evt-2', type: 'FLR', issuedMs: 2, summary: 'y', url: null },
+        ],
+        closeApproaches: [
+          { id: '1', name: '(2026 BB2)', missDistanceKm: 384_400, velocityKmS: 1, diameterMinM: 1, diameterMaxM: 2, hazardous: false, closeApproachMs: 1 },
+        ],
+        radioBlackoutScale: { scale: '2', text: 'Moderate radio blackout' },
+      }),
+    }),
+  });
+  layer.enable();
+  await layer.update();
+
+  const text = mgr._buildMetaText({ source: 'NOAA SWPC', stats: layer.getStats() });
+  assert.match(text, /R2 BLACKOUT/, text);
+  assert.match(text, /2 SOLAR EVENTS/, text);
+  assert.match(text, /NEO \(2026 BB2\) · 1\.0 LD/, text);
 });
 
 test('uncertain lifecycle state overrides ordinary feed status without disabling reconciliation', () => {
