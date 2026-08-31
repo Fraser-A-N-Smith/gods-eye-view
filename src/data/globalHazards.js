@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { mapEonetFeature, mapGdacsFeature } from './globalHazardsShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Global Hazards — GDACS floods & droughts, merged with the NASA EONET
@@ -75,6 +76,7 @@ export function createGlobalHazardsLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'global-hazards',
@@ -117,7 +119,9 @@ export function createGlobalHazardsLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const hazard of payload.hazards) {
           const lat = Number(hazard?.lat);
@@ -129,7 +133,7 @@ export function createGlobalHazardsLayer() {
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = hazard.id || `hazard-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `hazard:${stableId}`,
             position,
             point: {
@@ -163,9 +167,11 @@ export function createGlobalHazardsLayer() {
               dateMs: hazard.dateMs ?? null,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:GlobalHazards] Updated: ${_count} hazards`);
@@ -186,6 +192,7 @@ export function createGlobalHazardsLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -227,6 +234,7 @@ export function createGlobalHazardsLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };
