@@ -247,6 +247,13 @@ export const DATA_CREDITS = [
       '&amp; © OpenStreetMap contributors (ODbL 1.0)',
   },
   {
+    key: 'openrailwaymap',
+    html:
+      'Rail network overlay (tracks, stations, electrification): ' +
+      '<a href="https://www.openrailwaymap.org" target="_blank" rel="noopener">OpenRailwayMap</a> ' +
+      '&amp; © OpenStreetMap contributors (ODbL 1.0)',
+  },
+  {
     key: 'noaa-nws',
     html:
       'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +

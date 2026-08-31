@@ -48,6 +48,7 @@ How to read this:
 | **RainViewer** | Live weather radar (precipitation reflectivity) and infrared satellite cloud-cover overlays | Free public API, no key. RainViewer offers it for personal, educational and small-scale community use with no SLA — **verify current terms before any commercial or high-volume deployment** | "Weather radar © RainViewer" / "Satellite imagery © RainViewer" |
 | **OpenSeaMap** | Sea-mark raster overlay — buoys, beacons, lighthouses, harbours | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSeaMap contributors" |
 | **OpenSnowMap** | Ski piste raster overlay — pistes, lifts, nordic trails | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSnowMap.org, © OpenStreetMap contributors" |
+| **OpenRailwayMap** | World rail network overlay — tracks, stations, electrification | ODbL 1.0 (OpenStreetMap-derived); free tier is non-commercial/small-scale use on a volunteer-run tile server | "© OpenRailwayMap contributors, © OpenStreetMap contributors" |
 | **NIFC / WFIGS** | Mapped wildfire perimeters (US interagency coverage) | US public domain (interagency wildland fire data) | "NIFC / WFIGS Interagency Wildland Fire Perimeters" |
 | **GDACS** | Global disaster alerts — floods and droughts | Free public API, no key, courtesy citation requested | "GDACS — Global Disaster Alert and Coordination System" |
 | **NASA EONET** | Natural event tracker — severe storms, landslides, sea/lake ice, temperature extremes, dust/haze, snow, water color | US public domain | "NASA EONET" |
