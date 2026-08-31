@@ -2172,17 +2172,36 @@ function gdeltEventsProxy() {
  * globe entity), and the NOAA R-scale radio-blackout reading. Each of the
  * three is independently optional: none of them can blank the aurora/Kp
  * pair, and the aurora/Kp pair failing does not touch the panel fields
- * (`fetchJson` on the aurora URL still throws first, same as before).
+ * (`fetchJson` on the aurora URL still throws first, same as before). DONKI
+ * and NeoWs additionally run on their own slower cadence (`NASA_TTL_MS`,
+ * independent of the fast SWPC `TTL_MS`) because they sit behind NASA's
+ * shared, rate-limited `DEMO_KEY` rather than the keyless SWPC endpoints —
+ * see `NASA_TTL_MS`'s comment below for the request-budget math.
  *
  * @returns {import('vite').Plugin}
  */
 function spaceWeatherProxy() {
-  // OVATION republishes about every 5 minutes; Kp is 3-hourly. DONKI, NeoWs
-  // and the NOAA scales product are all low-volume and cheap to refetch at
-  // the same cadence, so they share this TTL rather than getting their own.
+  // OVATION republishes about every 5 minutes; Kp is 3-hourly; the NOAA
+  // R-scale readout is the same keyless, quota-free SWPC family — cheap to
+  // refetch on this cadence. DONKI and NeoWs are NOT: they live behind
+  // api.nasa.gov's shared DEMO_KEY, capped at 30 requests/hour and 50/day
+  // per IP. The client polls every 5 minutes (UPDATE_INTERVAL_MS in
+  // src/data/spaceWeather.js), which exceeds this TTL, so every client poll
+  // used to force a refresh of ALL FIVE upstreams — 2 NASA calls x 12
+  // polls/hour = ~24/hour, ~576/day, about 11x the daily DEMO_KEY allowance.
+  // DONKI and NeoWs get their own much longer cadence below (NASA_TTL_MS) so
+  // this fast TTL only ever governs the three free SWPC sources.
   const TTL_MS = 4 * 60 * 1000;
+  // DONKI notifications are daily-cadence and NeoWs's /feed is a whole-day
+  // query — nothing behind either one changes meaningfully inside an hour.
+  // 6 hours keeps both comfortably inside the DEMO_KEY's 50/day ceiling (4
+  // refreshes/day x 2 calls = 8/day) with headroom for restarts and manual
+  // refreshes, while still picking up a new CME/flare notification or a
+  // newly-catalogued close approach well within the same day it is issued.
+  const NASA_TTL_MS = 6 * 60 * 60 * 1000;
   const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
   const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'space-weather-v1.json');
+  const NASA_CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'space-weather-nasa-v1.json');
   const AURORA_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
   const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
   const NOAA_SCALES_URL = 'https://services.swpc.noaa.gov/products/noaa-scales.json';
@@ -2211,6 +2230,15 @@ function spaceWeatherProxy() {
   let diskLoaded = false;
   const inFlight = new Map();
 
+  // DONKI + NeoWs live on their own cadence (NASA_TTL_MS) independent of the
+  // fast SWPC TTL above — see NASA_TTL_MS's comment for why. This cache
+  // stores the last successful RAW upstream value per source (not a merged
+  // response), so `nasaSources()` below can hand `refreshUpstream` the same
+  // PromiseSettledResult shape it always has, whether or not this cycle
+  // actually reached api.nasa.gov.
+  let nasaCache = null;
+  let nasaDiskLoaded = false;
+
   async function loadDiskCache() {
     if (diskLoaded) return;
     diskLoaded = true;
@@ -2226,6 +2254,24 @@ function spaceWeatherProxy() {
       await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
     } catch (error) {
       console.warn(`[space-weather-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  async function loadNasaDiskCache() {
+    if (nasaDiskLoaded) return;
+    nasaDiskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(NASA_CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at)) nasaCache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveNasaDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(NASA_CACHE_PATH), { recursive: true });
+      await fsp.writeFile(NASA_CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[space-weather-proxy] NASA cache write failed: ${error?.message || error}`);
     }
   }
 
@@ -2249,18 +2295,68 @@ function spaceWeatherProxy() {
     return JSON.parse(text);
   }
 
+  /**
+   * DONKI notifications + NeoWs close approaches, refreshed on NASA_TTL_MS
+   * rather than the fast SWPC TTL. Returns the same
+   * `[PromiseSettledResult, PromiseSettledResult]` shape a fresh
+   * `Promise.allSettled([donki, neo])` call would, so the `mergeSpaceWeatherPayload`
+   * call site in `refreshUpstream` below needs no knowledge of whether this
+   * cycle actually hit api.nasa.gov. A fetch failure with a surviving prior
+   * value degrades to that stale value (last-known-good beats a blank
+   * panel); only a source that has NEVER succeeded surfaces as rejected,
+   * which `mergeSpaceWeatherPayload` already treats as "no data yet" for
+   * both of these optional fields.
+   * @returns {Promise<[PromiseSettledResult<*>, PromiseSettledResult<*>]>}
+   */
+  async function nasaSources() {
+    await loadNasaDiskCache();
+    if (nasaCache && Date.now() - nasaCache.at < NASA_TTL_MS) {
+      return [
+        'donkiValue' in nasaCache
+          ? { status: 'fulfilled', value: nasaCache.donkiValue }
+          : { status: 'rejected', reason: new Error('DONKI not yet fetched') },
+        'neoValue' in nasaCache
+          ? { status: 'fulfilled', value: nasaCache.neoValue }
+          : { status: 'rejected', reason: new Error('NeoWs not yet fetched') },
+      ];
+    }
+    const [donkiResult, neoResult] = await Promise.allSettled([
+      fetchJson(donkiUrl()),
+      fetchJson(neoWsUrl()),
+    ]);
+    const fresh = { at: Date.now() };
+    if (donkiResult.status === 'fulfilled') fresh.donkiValue = donkiResult.value;
+    else if (nasaCache && 'donkiValue' in nasaCache) fresh.donkiValue = nasaCache.donkiValue;
+    if (neoResult.status === 'fulfilled') fresh.neoValue = neoResult.value;
+    else if (nasaCache && 'neoValue' in nasaCache) fresh.neoValue = nasaCache.neoValue;
+    nasaCache = fresh;
+    void saveNasaDiskCache(fresh);
+    return [
+      'donkiValue' in fresh
+        ? { status: 'fulfilled', value: fresh.donkiValue }
+        : { status: 'rejected', reason: donkiResult.reason },
+      'neoValue' in fresh
+        ? { status: 'fulfilled', value: fresh.neoValue }
+        : { status: 'rejected', reason: neoResult.reason },
+    ];
+  }
+
   async function refreshUpstream() {
     // The aurora grid is required; everything else is not. A missing Kp
     // degrades the readout to UNKNOWN rather than failing the whole layer,
     // because the oval is still worth drawing without it — and the same
     // per-source null-safety extends to the three panel-only additions: a
     // DONKI, NeoWs, or NOAA-scales outage empties/nulls only its own field.
-    const [auroraResult, kpResult, donkiResult, neoResult, scalesResult] = await Promise.allSettled([
-      fetchJson(AURORA_URL),
-      fetchJson(KP_URL),
-      fetchJson(donkiUrl()),
-      fetchJson(neoWsUrl()),
-      fetchJson(NOAA_SCALES_URL),
+    // DONKI and NeoWs are fetched through nasaSources() rather than directly
+    // here, so this cycle only actually reaches api.nasa.gov once every
+    // NASA_TTL_MS regardless of how often the fast SWPC sources refresh.
+    const [[auroraResult, kpResult, scalesResult], [donkiResult, neoResult]] = await Promise.all([
+      Promise.allSettled([
+        fetchJson(AURORA_URL),
+        fetchJson(KP_URL),
+        fetchJson(NOAA_SCALES_URL),
+      ]),
+      nasaSources(),
     ]);
 
     // Merge (including the "aurora is required, everything else is
@@ -2886,9 +2982,17 @@ function hamRadioProxy() {
  * join implementation, so there is nothing here to fall out of sync.
  * `borderWaitTimes.test.mjs` covers the join contract once.
  *
- * The locations file is loaded once at module init and cached in memory
- * (`loadLocations` below) — it is static bundled config, not re-read per
- * request.
+ * The locations file is lazily loaded on first request and cached in memory
+ * from then on (`loadLocations` below) — it is static bundled config, so a
+ * successful read never needs to be repeated. A FAILED read is deliberately
+ * NOT cached: `loadLocations` used to catch its own error and memoize `{}`,
+ * a truthy value that satisfied `if (locations) return locations;` forever
+ * after — one transient read failure permanently emptied the join table for
+ * the rest of the process's life, silently dropping every crossing while
+ * still returning HTTP 200. `loadLocations` now lets a read failure
+ * propagate out of `refreshUpstream`, so it is handled by the same
+ * stale-serve/502 path as any other upstream failure, and the next request
+ * gets to retry the read instead of being stuck with an empty table forever.
  *
  * @returns {import('vite').Plugin}
  */
@@ -2907,12 +3011,11 @@ function borderWaitTimesProxy() {
 
   async function loadLocations() {
     if (locations) return locations;
-    try {
-      locations = JSON.parse(await fsp.readFile(LOCATIONS_PATH, 'utf8'));
-    } catch (error) {
-      console.warn(`[border-wait-times-proxy] failed to load ${LOCATIONS_PATH}: ${error?.message || error}`);
-      locations = {};
-    }
+    // Deliberately no try/catch here: a read/parse failure must propagate
+    // out of refreshUpstream and hit the existing stale-serve/502 path
+    // rather than being swallowed into a cached `{}` — see this function's
+    // doc comment above for the outage that caused.
+    locations = JSON.parse(await fsp.readFile(LOCATIONS_PATH, 'utf8'));
     return locations;
   }
 

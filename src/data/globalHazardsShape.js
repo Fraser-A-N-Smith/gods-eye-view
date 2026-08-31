@@ -18,6 +18,8 @@
  * categories with no dedicated layer of their own.
  */
 
+import { finiteOrNull } from './numeric.js';
+
 /** GDACS `eventtype` codes kept here. EQ/TC/WF/VO all duplicate a dedicated layer. */
 export const GDACS_HAZARD_TYPES = new Set(['FL', 'DR']);
 
@@ -37,8 +39,10 @@ export function mapGdacsFeature(feature) {
   const p = feature?.properties;
   if (!p || !GDACS_HAZARD_TYPES.has(p.eventtype)) return null;
   if (p.iscurrent !== 'true' || p.alertlevel === 'Green') return null;
-  const [lon, lat] = feature.geometry?.coordinates || [];
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  const [lonRaw, latRaw] = feature.geometry?.coordinates || [];
+  const lon = finiteOrNull(lonRaw);
+  const lat = finiteOrNull(latRaw);
+  if (lon === null || lat === null) return null;
   return {
     id: `gdacs:${p.eventtype}:${p.eventid}`,
     source: 'GDACS',
@@ -64,8 +68,10 @@ export function mapEonetFeature(event) {
   const categoryId = event?.categories?.[0]?.id;
   if (!categoryId || !EONET_HAZARD_CATEGORIES.has(categoryId)) return null;
   const geom = Array.isArray(event.geometry) ? event.geometry.at(-1) : null;
-  const [lon, lat] = geom?.coordinates || [];
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  const [lonRaw, latRaw] = geom?.coordinates || [];
+  const lon = finiteOrNull(lonRaw);
+  const lat = finiteOrNull(latRaw);
+  if (lon === null || lat === null) return null;
   return {
     id: `eonet:${event.id}`,
     source: 'EONET',
