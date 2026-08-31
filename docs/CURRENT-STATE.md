@@ -2,6 +2,32 @@
 
 Updated: August 31, 2026
 
+> **2026-08-31 — ACLED Events layer** (`src/data/acledEvents.js`,
+> `acledEventsShape.js`, `acledEventsProxy` in `vite.config.js`). Optional
+> bring-your-own-key layer, same shape as the existing Global Fishing Watch
+> vessel-events integration.
+>
+> **Human-coded, not machine-extracted — the highest-confidence conflict
+> layer this app has.** Both GDELT layers pull structure out of news text
+> automatically; ACLED's own regional research teams code each record from
+> media, partner, and local source reporting, geocoded to a specific
+> locality where possible with an explicit `geo_precision` flag. Still not
+> first-hand verification — every record's `caveat` field says so, attached
+> at the shape-normalization layer so no render path can drop it, same
+> discipline as the vessel-events layer's per-record hedge.
+>
+> **Off by default, and a missing key is a configured state, not an error.**
+> `/api/acled-events` returns `503 {error:'no_key'}` until the operator sets
+> both `ACLED_API_KEY` and `ACLED_API_EMAIL` (ACLED needs both, not a single
+> bearer token). The layer reads that as `KEY REQUIRED`, distinct from an
+> actual fetch failure — `getStats().unavailable` carries the distinction so
+> the toggle panel's honest-chip reducer never paints a keyless install red.
+>
+> **Free for non-commercial use only, under ACLED's own EULA — not a
+> Creative Commons license.** Documented in `DATA_SOURCES.md` alongside the
+> Global Fishing Watch and TeleGeography NonCommercial carve-outs; a
+> commercial deployment leaves both env vars unset.
+
 > **2026-08-31 — GDELT Event 2.0 "Geopolitical Events" layer**
 > (`src/data/gdeltCameoEvents.js`, `gdeltCameoEventsShape.js`,
 > `gdeltCameoEventsProxy` in `vite.config.js`). CAMEO-typed, actor/action-geocoded

@@ -54,6 +54,7 @@ import {
   mergeIntervalRecords,
   sliceRecordsForPreset,
 } from './src/data/gdeltCameoEventsShape.js';
+import { resolveAcledPreset, normalizeAcledEvents } from './src/data/acledEventsShape.js';
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
@@ -3607,6 +3608,180 @@ function vesselEventsProxy() {
 
   return {
     name: 'vessel-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * ACLED (Armed Conflict Location & Event Data Project) events proxy.
+ *
+ * Optional, bring-your-own-key, same shape as `vesselEventsProxy` above:
+ * the middleware is always registered, and a missing credential answers
+ * 503 `{error:'no_key'}` per request rather than refusing to install at all.
+ *
+ * ## Credentials
+ *
+ * ACLED requires BOTH a registered API key and the account's registered
+ * email as query parameters (`ACLED_API_KEY` + `ACLED_API_EMAIL`) — not a
+ * single bearer token like GFW. Register at https://acleddata.com/register.
+ *
+ * ## A note on the exact query surface
+ *
+ * ACLED's API has changed shape over time and this project could not
+ * exercise it against a live account while building this proxy (no network
+ * path to acleddata.com from the build environment). `event_type` filtering
+ * is corroborated across ACLED's own docs and multiple third-party clients
+ * and is the one filter this proxy relies on; deliberately NOT relied on
+ * here is any exact date-range parameter name, since sources disagree on
+ * its current shape — recency is instead enforced client-side by
+ * `normalizeAcledEvents`' own sort+cap. If ACLED's endpoint path or
+ * response envelope has moved since, `refreshUpstream` below is the only
+ * place that needs to change.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function acledEventsProxy() {
+  // ACLED's own coding pipeline updates on a roughly weekly cadence; a short
+  // TTL would only spend the caller's registered-account quota re-fetching
+  // the same rows.
+  const TTL_MS = 30 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'acled');
+  const BASE_URL = 'https://acleddata.com/api/acled/read';
+  const ATTRIBUTION = 'ACLED — acleddata.com (non-commercial use only)';
+  /** Recency window this proxy claims to the client — enforced client-side; see module doc. */
+  const WINDOW_DAYS = 30;
+
+  /** @type {Map<string, {at:number, body:string}>} */
+  const cache = new Map();
+  const inFlight = new Map();
+
+  const hasCredentials = () => Boolean(process.env.ACLED_API_KEY) && Boolean(process.env.ACLED_API_EMAIL);
+
+  const diskPath = (presetId) => path.join(CACHE_DIR, `events-${presetId}.json`);
+
+  async function loadDiskCache(presetId) {
+    if (cache.has(presetId)) return;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(diskPath(presetId), 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache.set(presetId, parsed);
+    } catch { /* first run for this preset */ }
+  }
+
+  async function saveDiskCache(presetId, entry) {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(diskPath(presetId), JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[acled-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=600' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream(preset) {
+    const url = new URL(BASE_URL);
+    url.searchParams.set('key', process.env.ACLED_API_KEY);
+    url.searchParams.set('email', process.env.ACLED_API_EMAIL);
+    url.searchParams.set('event_type', preset.eventType);
+    url.searchParams.set('limit', '1000');
+
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error('upstream returned a non-JSON body (likely a rejected request)');
+    }
+    if (parsed?.success === false) {
+      throw new Error(String(parsed?.error?.[0]?.message || parsed?.error || 'ACLED rejected the request'));
+    }
+    const normalized = normalizeAcledEvents(parsed, preset);
+    const body = JSON.stringify({
+      preset: preset.id,
+      label: preset.label,
+      events: normalized.events,
+      truncated: normalized.truncated,
+      total: normalized.total,
+      windowDays: WINDOW_DAYS,
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set(preset.id, fresh);
+    void saveDiskCache(preset.id, fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    // Registered FIRST — see the same ordering note on /api/vessel-events/status above.
+    middlewares.use('/api/acled-events/status', (req, res) => {
+      send(res, 200, JSON.stringify({ hasKey: hasCredentials() }), 'NONE');
+    });
+
+    middlewares.use('/api/acled-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveAcledPreset(requested);
+      if (!preset) {
+        send(res, 400, JSON.stringify({ error: 'Unknown ACLED event preset' }), 'NONE');
+        return;
+      }
+      if (!hasCredentials()) {
+        // Answered without touching upstream, so a keyless install costs
+        // ACLED nothing and the poll stays cheap.
+        send(res, 503, JSON.stringify({ error: 'no_key' }), 'NONE');
+        return;
+      }
+
+      await loadDiskCache(preset.id);
+      const cached = cache.get(preset.id);
+      if (cached && Date.now() - cached.at < TTL_MS) {
+        send(res, 200, cached.body, 'HIT');
+        return;
+      }
+      const stale = cached;
+      const request = coalesceProxyRequest(inFlight, `acled:${preset.id}`, () => refreshUpstream(preset));
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[acled-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'ACLED unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'acled-events-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9786,6 +9961,7 @@ export default defineConfig(({ mode }) => {
       fireballsProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
+      acledEventsProxy(),
       copernicusImageryProxy(),
       rocketLaunchesProxy(),
       terrainHeightsProxy(),

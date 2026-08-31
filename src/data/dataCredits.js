@@ -284,6 +284,14 @@ export const DATA_CREDITS = [
       '(CC BY-NC 4.0 — <strong>non-commercial use only</strong>)',
   },
   {
+    key: 'acled',
+    html:
+      'ACLED Events (battles, violence against civilians, riots, protests, explosions/remote violence, ' +
+      'strategic developments): ' +
+      '<a href="https://acleddata.com" target="_blank" rel="noopener">ACLED</a> ' +
+      '(<strong>non-commercial use only</strong> — see DATA_SOURCES.md)',
+  },
+  {
     key: 'nifc',
     html:
       'Wildfire perimeters: National Interagency Fire Center — WFIGS Interagency ' +

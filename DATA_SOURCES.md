@@ -46,6 +46,7 @@ How to read this:
 | **NASA NeoWs** | Near-Earth asteroid close approaches for today (space-weather panel) | US public domain | "NASA NeoWs — Near Earth Object Web Service" |
 | **Copernicus Data Space (Sentinel Hub)** | Sentinel-1 SAR and Sentinel-2 optical imagery basemaps (optional, BYO credentials) | [Copernicus data policy](https://dataspace.copernicus.eu) — free and open, including commercial use; attribution required | "Contains modified Copernicus Sentinel data — ESA" |
 | **Global Fishing Watch** ⚠️ | Vessel events — AIS gaps, encounters, loitering, port visits (optional, BYO token) | **CC BY-NC 4.0 — NonCommercial.** See the warning below | "Global Fishing Watch" + link |
+| **ACLED** ⚠️ | Human-coded political-violence and protest events — battles, violence against civilians, riots, protests, explosions/remote violence, strategic developments (optional, BYO key + registered email) | **Free for non-commercial use only, under ACLED's own EULA — NOT a Creative Commons license.** See the warning below | "ACLED" + link |
 | **RainViewer** | Live weather radar (precipitation reflectivity) and infrared satellite cloud-cover overlays | Free public API, no key. RainViewer offers it for personal, educational and small-scale community use with no SLA — **verify current terms before any commercial or high-volume deployment** | "Weather radar © RainViewer" / "Satellite imagery © RainViewer" |
 | **OpenSeaMap** | Sea-mark raster overlay — buoys, beacons, lighthouses, harbours | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSeaMap contributors" |
 | **OpenSnowMap** | Ski piste raster overlay — pistes, lifts, nordic trails | ODbL 1.0 (OpenStreetMap-derived) | "© OpenSnowMap.org, © OpenStreetMap contributors" |
@@ -114,6 +115,29 @@ with what it returns:
 This is the second NonCommercial source in the project, alongside the bundled
 TeleGeography cables. Both are optional and both are self-contained: a
 commercial deployment drops the cables folder and leaves `GFW_API_TOKEN` unset.
+
+### ⚠️ ACLED is free for non-commercial use only
+
+The ACLED Events layer fetches from ACLED (the Armed Conflict Location & Event
+Data Project) under **ACLED's own End User License Agreement** — this is
+**not** a Creative Commons license the way TeleGeography's and GFW's are.
+Nothing is bundled — the layer is off unless you supply your own
+`ACLED_API_KEY` **and** `ACLED_API_EMAIL` from a free
+[myACLED registration](https://acleddata.com/register) — but the EULA still
+governs what you may do with what it returns:
+
+> ACLED grants a royalty-free, non-exclusive, non-transferable license to use
+> its data and platforms for **non-commercial purposes**. Commercial entities
+> may not access or use ACLED data without first obtaining a corporate
+> license from ACLED — contact ACLED directly. If you use God's Eye View
+> commercially, do not enable the ACLED Events layer, and do not redistribute
+> its output.
+
+This is the third NonCommercial-flavored source in the project, alongside the
+bundled TeleGeography cables and the Global Fishing Watch vessel-events
+layer. All three are optional and self-contained: a commercial deployment
+drops the cables folder and leaves `GFW_API_TOKEN`/`ACLED_API_KEY`/
+`ACLED_API_EMAIL` unset.
 
 GFW also asks that clients stay under 50,000 requests/day. The proxy's 30-minute
 cache and single-flight coalescing keep an ordinary session several orders of

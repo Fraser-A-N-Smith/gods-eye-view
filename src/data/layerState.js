@@ -182,6 +182,19 @@ function integerOption(key, token, defaultValue) {
 }
 
 const OPTION_GROUPS = Object.freeze({
+  'acled-events': Object.freeze([
+    enumOption('preset', 'p', 'battles', [
+      'battles', 'violence-against-civilians', 'explosions-remote-violence', 'riots', 'protests',
+      'strategic-developments',
+    ], {
+      battles: 'b',
+      'violence-against-civilians': 'v',
+      'explosions-remote-violence': 'e',
+      riots: 'r',
+      protests: 'p',
+      'strategic-developments': 's',
+    }),
+  ]),
   flights: Object.freeze([
     // Product invariant 2026-08-22: the fleet's 3D models are DEFAULT-ON in
     // PROXIMITY mode. Proximity is itself the altitude/count gate — models only
@@ -282,6 +295,9 @@ export const SHARE_TRACKING_RESTORE_POLICIES = Object.freeze({
  * owns stable URL ordering.
  */
 export const LAYER_STATE_REGISTRY = Object.freeze([
+  Object.freeze({
+    id: 'acled-events', token: '9', disposition: 'enabled+options', optionOwner: 'acled-events',
+  }),
   Object.freeze({ id: 'ais-live-vessels', token: 'a', disposition: 'enabled-only' }),
   Object.freeze({ id: 'bikeshare', token: 'b', disposition: 'enabled-only' }),
   Object.freeze({ id: 'border-wait-times', token: '6', disposition: 'enabled-only' }),

@@ -3,6 +3,19 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (b)
+
+### Added
+
+- Added an optional ACLED Events layer (`acled-events`), bring-your-own-key
+  like the existing Global Fishing Watch vessel-events layer. ACLED's
+  regional research teams human-code each record from media, partner, and
+  local source reporting — higher confidence than either GDELT layer, still
+  not first-hand verification, and every record carries that hedge. Off by
+  default; requires the operator's own free `ACLED_API_KEY` +
+  `ACLED_API_EMAIL`, and reads `KEY REQUIRED` rather than erroring when
+  absent. Free for non-commercial use only under ACLED's own EULA.
+
 ## [Unreleased] — 2026-08-31 (a)
 
 ### Added

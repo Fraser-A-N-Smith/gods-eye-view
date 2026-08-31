@@ -182,6 +182,10 @@ const LAYER_ALIASES = new Map([
   ['geopolitical events', 'gdelt-cameo-events'],
   ['conflict events', 'gdelt-cameo-events'],
   ['cameo events', 'gdelt-cameo-events'],
+  ['acled', 'acled-events'],
+  ['acled events', 'acled-events'],
+  ['conflict data', 'acled-events'],
+  ['political violence', 'acled-events'],
 ]);
 
 const CITY_ALIASES = new Map([

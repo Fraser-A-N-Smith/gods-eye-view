@@ -8,6 +8,7 @@ import earthquakesLayer from './data/earthquakes.js';
 import firePerimetersLayer from './data/firePerimeters.js';
 import gdeltEventsLayer from './data/gdeltEvents.js';
 import gdeltCameoEventsLayer from './data/gdeltCameoEvents.js';
+import acledEventsLayer from './data/acledEvents.js';
 import globalHazardsLayer from './data/globalHazards.js';
 import volcanoesLayer from './data/volcanoes.js';
 import oceanBuoysLayer from './data/oceanBuoys.js';
@@ -297,6 +298,7 @@ async function init() {
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
     dataManager.register(vesselEventsLayer);
+    dataManager.register(acledEventsLayer);
     // OpenSeaMap sea marks and OpenSnowMap pistes — transparent raster
     // overlays composited onto the Cesium globe, independently toggleable.
     // They render only on a globe-imagery stack; each layer reports that
