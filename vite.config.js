@@ -66,6 +66,8 @@ import {
   normalizeRegionalArticles,
   normalizeRegionalPlace,
   normalizeRegionalWeather,
+  normalizeRegionalAirQuality,
+  normalizeRegionalFlood,
 } from './src/data/regionalBrief.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
@@ -9271,6 +9273,43 @@ async function fetchRegionalWeather(point) {
   }
 }
 
+/** Open-Meteo Air Quality API — same provider/licence as fetchRegionalWeather, keyless. */
+async function fetchRegionalAirQuality(point) {
+  const params = new URLSearchParams({
+    latitude: point.latitude.toFixed(5),
+    longitude: point.longitude.toFixed(5),
+    current: 'us_aqi,pm2_5,pm10',
+    timezone: 'UTC',
+  });
+  try {
+    const payload = await fetchRegionalJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`, {
+      maxBytes: WEATHER_EFFECTS_MAX_RESPONSE_BYTES,
+    });
+    return normalizeRegionalAirQuality(payload);
+  } catch {
+    return null;
+  }
+}
+
+/** Open-Meteo Flood API (Copernicus GloFAS river discharge) — same provider/licence, keyless. */
+async function fetchRegionalFlood(point) {
+  const params = new URLSearchParams({
+    latitude: point.latitude.toFixed(5),
+    longitude: point.longitude.toFixed(5),
+    daily: 'river_discharge',
+    forecast_days: '1',
+    timezone: 'UTC',
+  });
+  try {
+    const payload = await fetchRegionalJson(`https://flood-api.open-meteo.com/v1/flood?${params}`, {
+      maxBytes: WEATHER_EFFECTS_MAX_RESPONSE_BYTES,
+    });
+    return normalizeRegionalFlood(payload);
+  } catch {
+    return null;
+  }
+}
+
 /** True when at least one regional source produced usable data. */
 export function regionalBriefHasAnySource({ place, weather, news } = {}) {
   return Boolean(place || weather || (news && news.status !== 'unavailable'));
@@ -9278,12 +9317,18 @@ export function regionalBriefHasAnySource({ place, weather, news } = {}) {
 
 function regionalBriefProxy() {
   async function refresh(point, key) {
-    const [placeResult, weatherResult] = await Promise.allSettled([
+    const [placeResult, weatherResult, airQualityResult, floodResult] = await Promise.allSettled([
       fetchRegionalPlace(point),
       fetchRegionalWeather(point),
+      fetchRegionalAirQuality(point),
+      fetchRegionalFlood(point),
     ]);
     const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
     const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+    // Air quality and flood are optional enrichments, same as DONKI/NeoWs on the space-weather
+    // panel — either degrades to null independently and never affects overall brief status.
+    const airQuality = airQualityResult.status === 'fulfilled' ? airQualityResult.value : null;
+    const flood = floodResult.status === 'fulfilled' ? floodResult.value : null;
     const news = await fetchRegionalNews(place);
     if (!regionalBriefHasAnySource({ place, weather, news })) {
       throw new Error('All regional briefing sources unavailable');
@@ -9296,6 +9341,10 @@ function regionalBriefProxy() {
       placeStatus: place ? 'ready' : 'unavailable',
       weather,
       weatherStatus: weather ? 'ready' : 'unavailable',
+      airQuality,
+      airQualityStatus: airQuality ? 'ready' : 'unavailable',
+      flood,
+      floodStatus: flood ? 'ready' : 'unavailable',
       newsStatus: news.status,
       newsQuery: news.query,
       newsSource: news.source,

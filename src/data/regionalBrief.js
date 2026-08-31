@@ -90,6 +90,59 @@ export function normalizeRegionalWeather(payload) {
   };
 }
 
+/** Normalize Open-Meteo air-quality current conditions into a small source-stamped record. */
+export function normalizeRegionalAirQuality(payload) {
+  const current = payload?.current;
+  const numberOrNull = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    return Number.isFinite(Number(value)) ? Number(value) : null;
+  };
+  const usAqi = numberOrNull(current?.us_aqi);
+  const pm2_5 = numberOrNull(current?.pm2_5);
+  const pm10 = numberOrNull(current?.pm10);
+  if (usAqi === null && pm2_5 === null && pm10 === null) return null;
+  // Same zone-naive-timestamp caveat as normalizeRegionalWeather.
+  const observedRaw = typeof current?.time === 'string' && !/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(current.time)
+    ? `${current.time}Z`
+    : current?.time;
+  return {
+    observedAt: Number.isNaN(Date.parse(observedRaw)) ? null : new Date(observedRaw).toISOString(),
+    usAqi,
+    pm2_5,
+    pm10,
+  };
+}
+
+/** Bucket a US AQI value into the standard EPA descriptor. */
+export function airQualityLabel(usAqi) {
+  // Number(null) === 0 (finite!) — reject non-numeric input before coercing.
+  if (usAqi === null || usAqi === undefined || usAqi === '') return 'AIR QUALITY UNKNOWN';
+  const value = Number(usAqi);
+  if (!Number.isFinite(value)) return 'AIR QUALITY UNKNOWN';
+  if (value <= 50) return 'GOOD';
+  if (value <= 100) return 'MODERATE';
+  if (value <= 150) return 'UNHEALTHY (SENSITIVE)';
+  if (value <= 200) return 'UNHEALTHY';
+  if (value <= 300) return 'VERY UNHEALTHY';
+  return 'HAZARDOUS';
+}
+
+/** Normalize the Copernicus GloFAS river-discharge forecast (Open-Meteo Flood API) for today. */
+export function normalizeRegionalFlood(payload) {
+  const times = Array.isArray(payload?.daily?.time) ? payload.daily.time : [];
+  const discharge = Array.isArray(payload?.daily?.river_discharge) ? payload.daily.river_discharge : [];
+  const rawDischarge = discharge[0];
+  // Number(null) === 0 (finite!) — reject non-numeric input before coercing.
+  if (rawDischarge === null || rawDischarge === undefined || rawDischarge === '') return null;
+  const dischargeCms = Number(rawDischarge);
+  if (!Number.isFinite(dischargeCms)) return null;
+  const rawDate = typeof times[0] === 'string' ? times[0] : null;
+  const forecastDate = rawDate && !Number.isNaN(Date.parse(`${rawDate}T00:00:00Z`))
+    ? `${rawDate}T00:00:00Z`
+    : null;
+  return { forecastDate, dischargeCms };
+}
+
 /** Translate the WMO weather code used by Open-Meteo into concise cockpit copy. */
 export function weatherCodeLabel(code) {
   const value = Number(code);

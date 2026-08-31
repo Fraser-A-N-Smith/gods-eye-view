@@ -90,9 +90,10 @@ export const DATA_CREDITS = [
   {
     key: 'open-meteo',
     html:
-      'Cockpit current conditions: ' +
+      'Cockpit current conditions, air quality, and river discharge: ' +
       '<a href="https://open-meteo.com/en/licence" target="_blank" rel="noopener">Weather data by Open-Meteo.com</a> ' +
-      '(CC BY 4.0)',
+      '(CC BY 4.0; air quality from Copernicus CAMS, river discharge from Copernicus GloFAS, ' +
+      'both served through Open-Meteo)',
   },
   {
     key: 'google-news-rss',

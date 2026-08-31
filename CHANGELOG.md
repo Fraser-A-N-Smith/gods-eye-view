@@ -3,6 +3,19 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31
+
+### Added
+
+- Added **air quality** (US AQI, PM2.5, PM10 from Copernicus CAMS) and **river
+  discharge** (flood forecast from Copernicus GloFAS) to the cockpit Local Info
+  panel, both served through Open-Meteo's Air Quality and Flood APIs — the same
+  free, keyless provider already used for current weather. Each field is an
+  independent optional enrichment of `/api/regional-brief` (same
+  independent-degradation pattern as the space-weather panel's DONKI/NeoWs
+  fields): a fetch failure or a location with no modeled river reach shows as
+  `—`, never as an error, and never affects the panel's overall status.
+
 ## [Unreleased] — 2026-08-30 (f)
 
 ### Added
