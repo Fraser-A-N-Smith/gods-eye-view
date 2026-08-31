@@ -12,6 +12,8 @@ import {
 import satellitesLayer, {
   _catalogGroupForTest,
   _clearDenseCatalogStateForTest,
+  _clearIssCrewStateForTest,
+  _pendingIssCrewFetchForTest,
   _setDenseCatalogStateForTest,
 } from './satellites.js';
 
@@ -43,7 +45,7 @@ async function settleChip(maxTicks = 50) {
 }
 
 /** Every CelesTrak group the catalog ingests, plus the dense-mode tag. */
-const INGESTED_GROUPS = ['stations', 'visual', 'gps-ops', 'glonass', 'galileo', 'geo', 'dense'];
+const INGESTED_GROUPS = ['stations', 'visual', 'gps-ops', 'glonass', 'galileo', 'beidou', 'geo', 'dense'];
 
 test('every ingested CelesTrak group resolves to a real class', () => {
   // Guards against drift: adding a group to CATALOG_GROUPS without classifying
@@ -55,15 +57,16 @@ test('every ingested CelesTrak group resolves to a real class', () => {
   }
 });
 
-test('the three GNSS constellations share one NAV color and split by subtype', () => {
-  const navGroups = ['gps-ops', 'glonass', 'galileo'];
+test('the four GNSS constellations share one NAV color and split by subtype', () => {
+  const navGroups = ['gps-ops', 'glonass', 'galileo', 'beidou'];
   const colors = new Set(navGroups.map(satelliteClassColor));
-  assert.equal(colors.size, 1, 'GPS, GLONASS and Galileo must read as one NAV family');
+  assert.equal(colors.size, 1, 'GPS, GLONASS, Galileo and BeiDou must read as one NAV family');
   assert.equal([...colors][0], SATELLITE_CLASSES.nav.color);
 
   assert.equal(satelliteClassLabel('gps-ops'), 'NAV · GPS');
   assert.equal(satelliteClassLabel('glonass'), 'NAV · GLONASS');
   assert.equal(satelliteClassLabel('galileo'), 'NAV · GALILEO');
+  assert.equal(satelliteClassLabel('beidou'), 'NAV · BEIDOU');
 });
 
 test('class labels name the type, and the ISS names itself', () => {
@@ -148,13 +151,13 @@ test('the dense shell stays dimmer than the class it sits among', () => {
 
 test('tallying groups counts by class, folding the GNSS constellations together', () => {
   const counts = tallySatelliteClasses([
-    'gps-ops', 'gps-ops', 'glonass', 'galileo',
+    'gps-ops', 'gps-ops', 'glonass', 'galileo', 'beidou',
     'geo', 'geo', 'geo',
     'stations',
     'visual',
     'dense', 'dense',
   ]);
-  assert.equal(counts.nav, 4, 'all three GNSS groups fold into NAV');
+  assert.equal(counts.nav, 5, 'all four GNSS groups fold into NAV');
   assert.equal(counts.geo, 3);
   assert.equal(counts.station, 1);
   assert.equal(counts.visual, 1);
@@ -463,5 +466,78 @@ test('a dependency owner hiding the points surrenders the whole row', async () =
     assert.equal(satellitesLayer.getRowControls().chips.length, 1, 'released on restore');
   } finally {
     _clearDenseCatalogStateForTest();
+  }
+});
+
+test('getStats().issCrew defaults to an empty array when no roster has loaded', () => {
+  assert.deepEqual(satellitesLayer.getStats().issCrew, []);
+});
+
+test('a catalog rebuild that ingests the ISS fetches its crew roster and surfaces it via getStats', async () => {
+  const originalFetch = globalThis.fetch;
+  const log = console.log;
+  const warn = console.warn;
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    _setDenseCatalogStateForTest({});
+    // An earlier test in this file may have already ingested the ISS and
+    // started its own cooldown — reset it so this test's own fetch is not
+    // silently skipped by the hourly rate limit.
+    _clearIssCrewStateForTest();
+    const viewer = { scene: { primitives: { add: (p) => p, remove() {} } } };
+    globalThis.fetch = async (url) => {
+      if (String(url).endsWith('/api/iss-crew')) {
+        return {
+          ok: true,
+          json: async () => ({
+            crew: [{ name: 'Test Naut', craft: 'ISS' }],
+            retrievedAt: Date.now(),
+          }),
+        };
+      }
+      return { ok: true, text: async () => (String(url).endsWith('/stations') ? ISS_TLE : '') };
+    };
+
+    await satellitesLayer.update(viewer);
+    // The crew fetch is fire-and-forget (never blocks the catalog rebuild) —
+    // await it directly rather than guessing a microtask-flush count.
+    await _pendingIssCrewFetchForTest();
+
+    assert.deepEqual(satellitesLayer.getStats().issCrew, [{ name: 'Test Naut', craft: 'ISS' }]);
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    globalThis.fetch = originalFetch;
+    _clearDenseCatalogStateForTest();
+    _clearIssCrewStateForTest();
+  }
+});
+
+test('a failed ISS crew fetch keeps the last good roster instead of clearing it', async () => {
+  const originalFetch = globalThis.fetch;
+  const log = console.log;
+  const warn = console.warn;
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    _setDenseCatalogStateForTest({});
+    const viewer = { scene: { primitives: { add: (p) => p, remove() {} } } };
+    globalThis.fetch = async (url) => {
+      if (String(url).endsWith('/api/iss-crew')) return { ok: false, status: 502 };
+      return { ok: true, text: async () => (String(url).endsWith('/stations') ? ISS_TLE : '') };
+    };
+
+    await satellitesLayer.update(viewer);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.deepEqual(satellitesLayer.getStats().issCrew, [], 'never undefined, even on failure');
+  } finally {
+    console.log = log;
+    console.warn = warn;
+    globalThis.fetch = originalFetch;
+    _clearDenseCatalogStateForTest();
+    _clearIssCrewStateForTest();
   }
 });
