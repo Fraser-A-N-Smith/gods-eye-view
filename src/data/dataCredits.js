@@ -147,6 +147,25 @@ export const DATA_CREDITS = [
       '(US public domain; major crossings only)',
   },
   {
+    key: 'ioda',
+    html:
+      'Internet outage alerts: ' +
+      '<a href="https://ioda.caida.org" target="_blank" rel="noopener">IODA — Internet Outage Detection and Analysis</a>, CAIDA/UC San Diego',
+  },
+  {
+    key: 'ooni',
+    html:
+      'Censorship measurement aggregates: ' +
+      '<a href="https://ooni.org" target="_blank" rel="noopener">OONI — Open Observatory of Network Interference</a>',
+  },
+  {
+    key: 'country-centroids',
+    html:
+      'Country centroid lookup: ' +
+      '<a href="https://github.com/gavinr/world-countries-centroids" target="_blank" rel="noopener">gavinr/world-countries-centroids</a> ' +
+      '(MIT)',
+  },
+  {
     key: 'cneos-fireball',
     html:
       'Fireball/bolide detections: ' +

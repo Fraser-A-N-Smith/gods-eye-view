@@ -57,6 +57,8 @@ How to read this:
 | **PSKReporter** | Amateur (ham) radio propagation reception spots | Free public API; polled at most once per 5 minutes per PSKReporter's usage policy | "PSKReporter.info" |
 | **CBP Border Wait Times** | Estimated wait times at major US land border crossings (curated subset — CBP's API has no coordinates) | US public domain | "U.S. Customs and Border Protection" |
 | **NASA/JPL CNEOS Fireball API** | Recent fireball/bolide atmospheric detections | US public domain | "NASA/JPL CNEOS Fireball Data API" |
+| **CAIDA IODA** | Internet outage alerts (BGP, active-probing, darknet-traffic signals), by country | Free public API, no key, courtesy citation requested | "IODA — Internet Outage Detection and Analysis, CAIDA/UC San Diego" |
+| **OONI** | Censorship/blocking measurement aggregates, by country | Free public API, no key; OONI measurement data is published under CC BY (verify current terms at ooni.org before high-volume reuse) — only aggregate counts are used here, no individual measurement records | "OONI — Open Observatory of Network Interference" |
 | **Re:Earth Terrain** (Mapterhorn) | Terrain (keyless globe stacks — OSM etc. — + `/api/terrain/heights` ellipsoidal-height lookups) | Terrain mesh: CC BY 4.0; geoid: EGM2008 (NGA, public domain) | "Terrain (keyless globe stacks): Re:Earth Terrain / Mapterhorn (CC BY 4.0) / EGM2008 (NGA)" |
 | **OpenStreetMap (Overpass API)** — power plants & hospitals | Critical infrastructure points, viewport-scoped | ODbL 1.0 (shares the existing Overpass/OSM credit) | "© OpenStreetMap contributors" |
 
@@ -74,6 +76,7 @@ How to read this:
 - **NOAA SWPC real-time solar wind.** Also served through `/api/space-weather` (keyless, `services.swpc.noaa.gov/products/solar-wind/{plasma,mag}-7-day.json`). Distinct from DONKI's discrete CME/flare *event* notifications: this is continuous in-situ plasma/magnetic-field measurement from DSCOVR/ACE at the L1 Lagrange point, ~1-minute cadence, surfaced as a single "now" reading (`solarWindNow`: speed, density, IMF Bz/Bt) rather than a time series. The plasma and magnetic-field products fail independently of each other and of every other space-weather field — a plasma-only outage nulls only speed/density, a mag-only outage nulls only Bz/Bt, and either or both failing leaves the aurora oval, Kp index, DONKI, NeoWs, the R scale, and Sentry untouched.
 - **Re:Earth Terrain.** Keyless (no API key). Used two ways: (1) `src/mapStackController.js` swaps in a `Cesium.CesiumTerrainProvider` pointed at Re:Earth's `cesium-mesh/ellipsoid` quantized-mesh endpoint for globe stacks without a Cesium ion token (e.g. OSM), replacing a flat `EllipsoidTerrainProvider`; falls back to the flat provider if the endpoint can't be reached. (2) The server-side `/api/terrain/heights` proxy (disk-cached, serve-stale) resolves per-point ellipsoidal ground height for entity placement. Both are best-effort with a keyless-safe fallback (bundled EGM96 geoid math) if Re:Earth is unreachable.
 - **Global Context installation context.** `/api/military-installations` queries only an allow-listed subset of OSM `military=*` and `landuse=military` features inside a maximum 10° non-dateline viewport. It caches and may serve stale mapped context, but it is neither a global installation database nor evidence of capability, activity, or absence. User-requested Google Places results remain separately sourced candidates unless their returned types explicitly establish military classification; generic offices, museums, and similarly ambiguous matches are excluded from military proximity counts.
+- **IODA / OONI (Internet Outages & Censorship).** `/api/internet-outages` fetches CAIDA IODA's country-level outage alerts (trailing 24h) and OONI's per-country censorship-measurement aggregates (trailing 2 days) with `Promise.allSettled` — one source down degrades the merged set rather than blanking the layer — caches the merged result for 5 minutes, and joins both against the bundled `config/country_centroids.json` lookup (see below), since neither upstream response carries a coordinate. IODA alerts are filtered to non-`normal` levels; OONI rows are filtered to a minimum sample size (5+ measurements) and anomaly rate (10%+) to keep single-measurement noise off the map. Both are live signals, not confirmed findings: an IODA alert can reflect a natural outage as easily as a deliberate one, and an OONI anomaly can reflect network conditions the classifier cannot fully attribute to censorship — the layer renders both as distinct kinds (`OUTAGE` vs `CENSORSHIP`) so neither is read as the other.
 - **Cockpit regional briefing.** `/api/regional-brief` rounds aircraft coordinates into 0.1° cache cells, caches results for five minutes, and serializes Nominatim calls at no more than one request per second. Google News RSS is queried with the resolved locality/region first; GDELT is used only when that RSS query fails or is empty. Google's published Google News terms restrict that source to personal, noncommercial use, so commercial deployments must disable/replace it or obtain separate permission; GDELT permits commercial dataset use with citation. The Data attribution popover identifies the active headline sources; article links retain publisher attribution. Headlines are location-query matches, not verified incidents, risk rankings, or evidence that a location is safe. Empty, partial, stale, and unavailable source states remain distinct. Open-Meteo supplies current conditions independently of the news source. `WX OFF` disables cockpit weather rendering only; the Local Info briefing still fetches its source-backed weather values and displays the required linked Open-Meteo credit.
 - **Dynamic weather presentation.** While cockpit mode is active, `/api/weather-effects` requests current Open-Meteo observations for the aircraft/camera location, rounds coordinates into 0.1° cache cells, caches results for five minutes, and may retain a stale observation for up to 30 minutes during a transient outage. WMO condition code selects the visual family; observed cloud cover, precipitation, visibility, wind speed, and wind direction bound its strength and motion. Missing or expired weather renders no synthetic atmospheric effect, and normal globe view never renders the weather overlay.
 
@@ -90,6 +93,7 @@ Static datasets shipped in the repo for an out-of-the-box experience. **None are
 | **TeleGeography Submarine Cable Map** (712 cables + 1,917 landing points) | `telegeography_submarine_cables/` | **CC BY-NC-SA 3.0** | ❌ **NonCommercial — remove for commercial use** | "© TeleGeography — submarinecablemap.com" |
 | **Natural Earth physical regions** (1,046 land + 292 marine named polygons) | `natural_earth/` | **Public domain** | ✅ (no restrictions) | "Made with Natural Earth" (courtesy credit — not legally required) |
 | **DataSF Analysis Neighborhoods** (41 SF neighborhood polygons) | `neighborhoods/` | **PDDL 1.0** (public domain) | ✅ (no restrictions) | "City & County of San Francisco — DataSF" (courtesy — not legally required) |
+| **Country centroids** (244 ISO-3166-1 alpha-2 entries) | `config/country_centroids.json` | **MIT** | ✅ | "gavinr/world-countries-centroids (MIT)" |
 
 ### ⚠️ TeleGeography is bundled but NonCommercial
 
@@ -176,6 +180,19 @@ is legally required; we note the source here and in the folder's `SOURCE.md`, wh
 the retrieval date (2026-07-30), exact download URL, license evidence, and the
 deterministic transform (`scripts/build-sf-neighborhoods.mjs`: `nhood` → `name`, ~2 m
 Douglas-Peucker simplification, 6-decimal rounding).
+
+### Country centroids (`config/country_centroids.json`)
+
+Built from the `dist/countries.csv` release of
+[gavinr/world-countries-centroids](https://github.com/gavinr/world-countries-centroids) (MIT license),
+which computes each country's centroid from its **largest landmass** rather than a naive bounding-box
+center — the reason large multi-region countries (USA, Chile, New Zealand) get a rational center point
+instead of one that lands in open ocean. Keyed by ISO 3166-1 alpha-2 code, coordinates rounded to 4
+decimal places; 5 duplicate ISO codes in the source CSV were dropped (first occurrence kept), leaving 244
+entries. Backs the Internet Outages & Censorship layer's country→coordinate join (`src/data/internetOutagesShape.js`),
+since neither IODA nor OONI's response carries a coordinate of its own. A handful of entries (US, GB, FR,
+JP, AU, BR, RU, CN, ZA, IN, CA, DE) were spot-checked against known real-world centroids before this file
+was committed.
 
 ---
 

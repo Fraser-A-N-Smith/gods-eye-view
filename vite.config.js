@@ -50,6 +50,7 @@ import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
 import { mapFireballRows } from './src/data/fireballsShape.js';
 import { mapOverpassElement } from './src/data/criticalInfrastructureShape.js';
+import { mapIodaAlert, mapOoniAggregateRow } from './src/data/internetOutagesShape.js';
 import { normalizeAlertCollection, normalizeCyclones } from './src/data/weatherAlertsShape.js';
 import {
   resolveVesselEventPreset,
@@ -3048,6 +3049,201 @@ function fireballsProxy() {
 
   return {
     name: 'fireballs-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Internet Outages & Censorship proxy — CAIDA IODA outage alerts merged with
+ * OONI censorship-measurement aggregates, both by country.
+ *
+ * Both upstreams are keyless and public. Neither reliably sends permissive
+ * CORS headers, so a direct browser fetch cannot be trusted (same reasoning
+ * as `spaceWeatherProxy` above). This proxy fetches both with
+ * `Promise.allSettled` — one upstream being down must not blank the other —
+ * joins each against the bundled `config/country_centroids.json` lookup
+ * (neither upstream carries a coordinate of its own), and serves the merged,
+ * capped result as `{ outages: [...], retrievedAt }`.
+ *
+ * The actual IODA/OONI filter and mapping rules live in the Cesium-free
+ * `src/data/internetOutagesShape.js` (mirroring the existing
+ * `globalHazardsShape.js` two-upstream-merge precedent) and are imported
+ * directly above — this proxy and the browser layer run the SAME
+ * `mapIodaAlert`/`mapOoniAggregateRow` implementation, so there is nothing
+ * here to fall out of sync. `internetOutagesShape.test.mjs` covers the
+ * filter contract once.
+ *
+ * Confidence note: both upstream response shapes come from the providers'
+ * own spec/test source (see `internetOutagesShape.js`'s doc comment for
+ * exactly what was and wasn't verified against a live response) — this is
+ * higher-confidence than most of this batch, but the exact IODA base-URL
+ * path prefix was not independently confirmed in this session.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function internetOutagesProxy() {
+  const TTL_MS = 5 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_OUTAGES = 400;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'internet-outages-v1.json');
+  const CENTROIDS_PATH = path.join(__dirname, 'config', 'country_centroids.json');
+  // IODA: alerts for every 'country' entity over a trailing 24h window.
+  const iodaAlertsUrl = () => {
+    const until = Math.floor(Date.now() / 1000);
+    const from = until - 24 * 60 * 60;
+    return `https://api.ioda.caida.org/v2/outages/alerts/country?from=${from}&until=${until}`;
+  };
+  // OONI: per-country measurement aggregate over a trailing 2-day window
+  // (yesterday through today), matching OONI's own YYYY-MM-DD date params.
+  const ooniAggregationUrl = () => {
+    const toIsoDate = (d) => d.toISOString().slice(0, 10);
+    const until = new Date();
+    const since = new Date(until.getTime() - 2 * 24 * 60 * 60 * 1000);
+    return 'https://api.ooni.io/api/v1/aggregation' +
+      `?since=${toIsoDate(since)}&until=${toIsoDate(until)}&axis_x=probe_cc`;
+  };
+  const ATTRIBUTION = 'CAIDA IODA / OONI — Open Observatory of Network Interference';
+
+  let cache = null;
+  let diskLoaded = false;
+  let centroids = null;
+  const inFlight = new Map();
+
+  async function loadCentroids() {
+    if (centroids) return centroids;
+    try {
+      centroids = JSON.parse(await fsp.readFile(CENTROIDS_PATH, 'utf8'));
+    } catch (error) {
+      console.warn(`[internet-outages-proxy] failed to load ${CENTROIDS_PATH}: ${error?.message || error}`);
+      centroids = {};
+    }
+    return centroids;
+  }
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[internet-outages-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchJson(url) {
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    return JSON.parse(text);
+  }
+
+  async function refreshUpstream() {
+    // Neither upstream is required by itself — one being down degrades the
+    // merged set rather than blanking the layer. `loadCentroids` never
+    // rejects (a missing/corrupt bundled file degrades to `{}`, which just
+    // means every row fails its centroid-match check), so it is awaited
+    // directly rather than wrapped in the allSettled pair.
+    const [iodaResult, ooniResult] = await Promise.allSettled([
+      fetchJson(iodaAlertsUrl()),
+      fetchJson(ooniAggregationUrl()),
+    ]);
+    const countryCentroids = await loadCentroids();
+    if (iodaResult.status !== 'fulfilled' && ooniResult.status !== 'fulfilled') {
+      console.warn(`[internet-outages-proxy] IODA fetch failed: ${iodaResult.reason?.message || iodaResult.reason}`);
+      console.warn(`[internet-outages-proxy] OONI fetch failed: ${ooniResult.reason?.message || ooniResult.reason}`);
+      throw iodaResult.reason;
+    }
+
+    const outages = [];
+    if (iodaResult.status === 'fulfilled') {
+      const alerts = Array.isArray(iodaResult.value) ? iodaResult.value : [];
+      for (const alert of alerts) {
+        const mapped = mapIodaAlert(alert, countryCentroids);
+        if (mapped) outages.push(mapped);
+      }
+    } else {
+      console.warn(`[internet-outages-proxy] IODA fetch failed: ${iodaResult.reason?.message || iodaResult.reason}`);
+    }
+    if (ooniResult.status === 'fulfilled') {
+      const rows = Array.isArray(ooniResult.value?.result) ? ooniResult.value.result : [];
+      const windowEndMs = Date.now();
+      for (const row of rows) {
+        const mapped = mapOoniAggregateRow(row, countryCentroids, windowEndMs);
+        if (mapped) outages.push(mapped);
+      }
+    } else {
+      console.warn(`[internet-outages-proxy] OONI fetch failed: ${ooniResult.reason?.message || ooniResult.reason}`);
+    }
+
+    const body = JSON.stringify({
+      outages: outages.slice(0, MAX_OUTAGES),
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/internet-outages', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'internet-outages', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[internet-outages-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Internet outages unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'internet-outages-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9548,6 +9744,7 @@ export default defineConfig(({ mode }) => {
       hamRadioProxy(),
       borderWaitTimesProxy(),
       fireballsProxy(),
+      internetOutagesProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
       copernicusImageryProxy(),
