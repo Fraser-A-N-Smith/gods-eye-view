@@ -79,7 +79,9 @@ import {
   normalizeRegionalArticles,
   normalizeRegionalPlace,
   normalizeRegionalWeather,
+  normalizeReliefWebReports,
 } from './src/data/regionalBrief.js';
+import { alpha2ToAlpha3 } from './src/data/iso3166.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
 import { parseSilenceTimeoutEnv } from './src/data/aisWatchdog.js';
@@ -9508,6 +9510,12 @@ const REGIONAL_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const _regionalBriefCache = new Map();
 const _regionalBriefInFlight = new Map();
 const _regionalBriefRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30, globalMax: 90 });
+// ReliefWeb reports change on a humanitarian-response cadence, not a news
+// cadence — a longer, country-keyed cache nested inside the regional-brief
+// cache, so a busy news minute does not re-hit ReliefWeb for the same country.
+const RELIEFWEB_CACHE_MS = 30 * 60_000;
+const _reliefWebCache = new Map();
+const _reliefWebInFlight = new Map();
 const WEATHER_EFFECTS_CACHE_MS = 5 * 60_000;
 const WEATHER_EFFECTS_STALE_MS = 30 * 60_000;
 const WEATHER_EFFECTS_MAX_CACHE = 180;
@@ -9682,6 +9690,56 @@ async function fetchRegionalNews(place) {
   }
 }
 
+/**
+ * Humanitarian-response context for the resolved place's country, from
+ * ReliefWeb (UN OCHA) — country-level, no key required.
+ *
+ * Independently optional: this function never throws, so a ReliefWeb outage
+ * degrades only its own `humanitarian` field in the regional-brief payload,
+ * exactly the same discipline `mergeSpaceWeatherPayload` uses for its
+ * DONKI/NeoWs fields — absence is `{status:'unavailable', reports:[]}`,
+ * never a rejection that blanks the place/weather/news fields too.
+ *
+ * @param {object|null} place Resolved `normalizeRegionalPlace` output.
+ * @returns {Promise<{status: string, reports: Array<object>}>}
+ */
+async function fetchReliefWebReports(place) {
+  const iso3 = alpha2ToAlpha3(place?.countryCode);
+  if (!iso3) return { status: 'unavailable', reports: [] };
+
+  const cached = _reliefWebCache.get(iso3);
+  if (cached && Date.now() - cached.at < RELIEFWEB_CACHE_MS) {
+    return { status: cached.reports.length ? 'ready' : 'empty', reports: cached.reports };
+  }
+
+  const request = coalesceProxyRequest(_reliefWebInFlight, iso3, async () => {
+    const params = new URLSearchParams({
+      appname: 'gods-eye-view',
+      'filter[field]': 'country.iso3',
+      'filter[value]': iso3,
+      limit: '5',
+    });
+    params.append('sort[]', 'date:desc');
+    params.append('fields[include][]', 'title');
+    params.append('fields[include][]', 'url');
+    params.append('fields[include][]', 'date');
+    const payload = await fetchRegionalJson(`https://api.reliefweb.int/v1/reports?${params}`, { timeoutMs: 9000 });
+    const reports = normalizeReliefWebReports(payload);
+    _reliefWebCache.set(iso3, { at: Date.now(), reports });
+    return reports;
+  });
+
+  try {
+    const reports = await request.promise;
+    return { status: reports.length ? 'ready' : 'empty', reports };
+  } catch {
+    // A stale country-level cache is still useful humanitarian context; an
+    // outright miss degrades to "unavailable", never to a thrown rejection.
+    if (cached) return { status: 'stale', reports: cached.reports };
+    return { status: 'unavailable', reports: [] };
+  }
+}
+
 async function fetchRegionalWeather(point) {
   const params = new URLSearchParams({
     latitude: point.latitude.toFixed(5),
@@ -9712,7 +9770,13 @@ function regionalBriefProxy() {
     ]);
     const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
     const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
-    const news = await fetchRegionalNews(place);
+    // Both depend on the resolved place, not on each other — fetched
+    // concurrently. Neither throws, so a ReliefWeb outage cannot blank news
+    // (or vice versa); see fetchReliefWebReports's own doc.
+    const [news, humanitarian] = await Promise.all([
+      fetchRegionalNews(place),
+      fetchReliefWebReports(place),
+    ]);
     if (!regionalBriefHasAnySource({ place, weather, news })) {
       throw new Error('All regional briefing sources unavailable');
     }
@@ -9728,6 +9792,8 @@ function regionalBriefProxy() {
       newsQuery: news.query,
       newsSource: news.source,
       articles: news.articles,
+      humanitarianStatus: humanitarian.status,
+      humanitarianReports: humanitarian.reports,
     };
     _regionalBriefCache.set(key, { payload, cachedAt: Date.now() });
     trimRegionalBriefCache();

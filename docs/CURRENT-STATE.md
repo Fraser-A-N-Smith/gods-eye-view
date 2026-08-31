@@ -2,6 +2,29 @@
 
 Updated: August 31, 2026
 
+> **2026-08-31 — ReliefWeb humanitarian context in the cockpit Local Info page**
+> (`normalizeReliefWebReports` in `src/data/regionalBrief.js`,
+> `fetchReliefWebReports` in `vite.config.js`, `src/data/iso3166.js`). Not a
+> globe layer — ReliefWeb's own reports are country-level, no point
+> coordinates, so a globe dot would overclaim precision the data doesn't
+> have.
+>
+> **Rides along in the existing `/api/regional-brief` response rather than a
+> new endpoint or a new tabbed cockpit page.** That endpoint already resolves
+> a Nominatim country code for the same request; a second geocoding call
+> would have been pure waste. `src/data/iso3166.js` converts Nominatim's
+> alpha-2 code to the alpha-3 ReliefWeb's `country.iso3` filter needs — a
+> static standards table, no network dependency.
+>
+> **Independently optional, same discipline as the space-weather panel's
+> DONKI/NeoWs fields.** A ReliefWeb outage degrades only its own
+> `humanitarianStatus`/`humanitarianReports` fields to `'unavailable'`/`[]`;
+> it can never blank the place, weather, or news fields the endpoint already
+> promised, and vice versa. Cached separately by country for 30 minutes
+> (reports move on a humanitarian-response cadence, not a news cadence),
+> nested inside the existing regional-brief cache/rate-limit/coalescing
+> infrastructure rather than duplicating it.
+
 > **2026-08-31 — ACLED Events layer** (`src/data/acledEvents.js`,
 > `acledEventsShape.js`, `acledEventsProxy` in `vite.config.js`). Optional
 > bring-your-own-key layer, same shape as the existing Global Fishing Watch

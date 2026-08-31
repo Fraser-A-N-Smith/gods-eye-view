@@ -3,6 +3,20 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (c)
+
+### Added
+
+- Added ReliefWeb (UN OCHA) humanitarian-response context to the cockpit
+  Local Info page — country-matched report links, riding along in the
+  existing `/api/regional-brief` response as an independently-optional
+  field (a ReliefWeb outage never blanks the place/weather/news fields,
+  same discipline as the space-weather panel's DONKI/NeoWs fields). Not a
+  globe layer: ReliefWeb's reports are country-level, not point-geocoded.
+- Added `src/data/iso3166.js`, a static ISO 3166-1 alpha-2→alpha-3 lookup,
+  so the existing Nominatim country resolution can also drive ReliefWeb's
+  `country.iso3` filter without a second geocoding round-trip.
+
 ## [Unreleased] — 2026-08-31 (b)
 
 ### Added

@@ -109,6 +109,13 @@ export const DATA_CREDITS = [
       '(location-matched article links; publisher terms apply)',
   },
   {
+    key: 'reliefweb',
+    html:
+      'Cockpit humanitarian-response context: ' +
+      '<a href="https://reliefweb.int" target="_blank" rel="noopener">ReliefWeb (UN OCHA)</a> ' +
+      '(country-matched report links; publisher terms apply)',
+  },
+  {
     key: 'gdelt-cameo-events',
     html:
       'Geopolitical Events (CAMEO-typed, rolling buffer): ' +
