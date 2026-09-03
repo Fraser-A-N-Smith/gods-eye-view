@@ -18,11 +18,19 @@ const PENDING_TRACKING_POLL_MS = 1_000;
 const TRACKING_ID_GRAMMAR = /^[0-9a-z~_-]{1,16}$/;
 /**
  * Ceilings for the untrusted v2 layer fields. Both are far above any legitimate
- * payload (16 one-character tokens; a dozen short option assignments), so a
- * value past them is malformed or hostile. Reject the WHOLE payload, matching
- * the unknown-token rule — never salvage a prefix.
+ * payload, so a value past them is malformed or hostile. Reject the WHOLE
+ * payload, matching the unknown-token rule — never salvage a prefix.
+ *
+ * MAX_ENABLED_LAYERS_CHARS must stay above the cost of enabling EVERY
+ * registered layer at once — a real, legitimate share link, not an edge
+ * case. It was previously 64, sized for an assumed "~16 enabled at once";
+ * that already undercounted the full registry (69 chars to enable all 35
+ * layers as of this writing) even before newer layers started using 2-3
+ * char tokens (see the token-length note on `validateLayerStateRegistry`
+ * below). 320 gives real headroom for registry growth while still
+ * rejecting a truly hostile payload.
  */
-const MAX_ENABLED_LAYERS_CHARS = 64;
+const MAX_ENABLED_LAYERS_CHARS = 320;
 const MAX_LAYER_OPTIONS_CHARS = 512;
 export const LAYER_STATE_STORAGE_KEY = 'gev:layer-state:v2';
 export const LAYER_RESTORE_ORIGINS = Object.freeze({
@@ -355,7 +363,13 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    if (!/^[a-z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // Single-char tokens (a-z0-9, 36 possible) ran out at 35 registered layers —
+    // '0' is deliberately kept unregistered forever (see the "no unregistered
+    // layer token remains for this test" guard in sharelink.celestial.test.mjs).
+    // Tokens are '.'-joined in the encoded string (see encode/decodeLayerStateParams),
+    // never concatenated, so a 2-3 char token costs a few more bytes per enabled
+    // layer, not a format change — every new layer from here on gets one.
+    if (!/^[a-z0-9]{1,3}$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {
