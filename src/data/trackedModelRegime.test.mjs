@@ -225,7 +225,7 @@ const LAYERS = [
     driveFleetModel: militaryDriveFleetModel,
     ensureFleetModel: militaryEnsureFleetModel,
     trackedBillboardColor: militaryTrackedBillboardColor,
-    bellyM: 5.631 * 0.8,
+    bellyM: 1.32, // fastjet's own real-asset belly offset (aircraftClass.js CLASS_MODEL_REAL)
     seed({ viewer, tracked = true, icao24 = ICAO, modelCollection = null, onGround = false, models = [] }) {
       const billboard = contactBillboard();
       _setTrackedMilitaryRefreshStateForTest({

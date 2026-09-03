@@ -3,6 +3,24 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-09-03 (pending review, not yet on `main`)
+
+### Added
+
+- Added original, first-party 3D models for the `glider` and `fastjet`
+  aircraft classes (`public/models/glider.glb`, `fastjet.glb`;
+  `scripts/build-procedural-aircraft.mjs`) — procedurally generated low-poly,
+  flat-shaded meshes, author-original geometry with no third-party source, so
+  the license carve-out in `public/models/README.md` does not apply to them.
+  No suitable licensed source asset turned up for either class after a
+  bounded GitHub search. This replaces military `fastjet`'s previous
+  `jet.glb` fallback (a civilian "Private Jet" mesh — a known mismatch for
+  F-16/F-22/Su-27-class fighters) with a purpose-built swept-wing fighter
+  silhouette, and civilian `glider`'s shared-747 fallback with a long-wing,
+  T-tail sailplane silhouette. `bellyM`/`radiusM`/trail-anchor values are
+  independently re-measured and verified by the existing
+  `modelScale.test.mjs`, same as every other `CLASS_MODEL_REAL` entry.
+
 ## [Unreleased] — 2026-08-31 (d)
 
 ### Added

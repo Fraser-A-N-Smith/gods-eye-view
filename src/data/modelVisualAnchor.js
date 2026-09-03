@@ -70,6 +70,8 @@ export const MODEL_TRAIL_ANCHOR_NATIVE = Object.freeze({
   '/models/atr72.glb': Object.freeze([12.9785, -1.2935, 0]),
   '/models/a320.glb': Object.freeze([17.5942, -1.6248, 0]),
   '/models/a380.glb': Object.freeze([34.3844, -4.8036, 0]),
+  '/models/glider.glb': Object.freeze([3.9514, -0.4106, 0]),
+  '/models/fastjet.glb': Object.freeze([7.347, -0.8901, 0]),
 });
 
 /** @constant Cesium's OWN axis correction for a glTF loaded with the

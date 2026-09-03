@@ -162,4 +162,12 @@ export const CLASS_MODEL_REAL = {
   // convention (public/models/README.md has the exact transform).
   airliner:   { url: '/models/a320.glb',      bellyM: 5.66, radiusM: 26.49 },
   quadjet:    { url: '/models/a380.glb',      bellyM: 10.96, radiusM: 54.85 },
+  // 2026-09-03 addition: glider and fastjet — no suitable licensed source
+  // asset turned up for either (see docs/FLIGHTS-VISUALIZATION-RESEARCH.md),
+  // so both are original, from-scratch procedural low-poly meshes (author's
+  // own vertices, no third-party model or derivative — see
+  // scripts/build-procedural-aircraft.mjs and public/models/README.md).
+  // On a review branch, not yet merged to main — see that script's header.
+  glider:     { url: '/models/glider.glb',    bellyM: 0.70, radiusM: 9.42 },
+  fastjet:    { url: '/models/fastjet.glb',   bellyM: 1.32, radiusM: 9.11 },
 };

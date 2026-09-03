@@ -1,8 +1,10 @@
 # Bundled 3D Model Attribution
 
-The model files in this directory are third-party visual assets. They are not
-covered by the repository's MIT source-code license; each remains available
-under the license listed below.
+Most of the model files in this directory are third-party visual assets. They
+are not covered by the repository's MIT source-code license; each remains
+available under the license listed below. Two files — `glider.glb` and
+`fastjet.glb` — are original, first-party work; see the section below the
+third-party table.
 
 | File | Original work and creator | Source | License | Project modifications |
 |---|---|---|---|---|
@@ -21,3 +23,33 @@ under the license listed below.
 CC BY 4.0 permits sharing and adaptation, including commercial use, provided
 appropriate credit is retained, the license is linked, and modifications are
 identified. These credits do not imply endorsement by the original creators.
+
+## Original (first-party) models
+
+Unlike the table above, these two are **original work created for this
+project** — author-original vertices, no third-party mesh, scan, or
+derivative — so they are covered by the repository's normal MIT source
+license like any other file, not a third-party carve-out.
+
+| File | What it is | How it was made |
+|---|---|---|
+| `glider.glb` | Generic single-seat sailplane silhouette for the `glider` class (length 8.0 m, span 17.0 m — round figures in a real sailplane's range; no specific real airframe copied). | Procedurally generated low-poly, flat-shaded mesh — parametric fuselage loft + tapered unswept wings + T-tail, no source asset. See `scripts/build-procedural-aircraft.mjs`. |
+| `fastjet.glb` | Generic single-seat swept-wing fighter silhouette for the `fastjet` class (length 15.0 m, span 10.0 m — round figures in a real single-seat fighter's range; no specific real airframe copied). | Procedurally generated low-poly, flat-shaded mesh — parametric fuselage loft + swept wings + twin canted tail fins + stabilators, no source asset. See `scripts/build-procedural-aircraft.mjs`. |
+
+Both exist because no suitable licensed source asset was found for either
+class after a bounded search (see
+`docs/FLIGHTS-VISUALIZATION-RESEARCH.md`) — `glider` and `fastjet` were the
+two remaining `CLASS_MODEL_REAL` classes still on the shared `airplane.glb`
+(and, for military `fastjet`, the civilian-shaped `jet.glb`) fallback.
+Low-poly and flat-shaded is a deliberate fit, not a limitation: rendered
+aircraft carry `MODEL_COLOR_BLEND_AMOUNT` 0.94 (see `aircraftClass.js`), so
+the class tint already supplies 94% of the surface colour and per-triangle
+facets read as clean silhouette rather than needing texture detail —
+consistent with `atr72.glb`'s existing "flat abstracted" treatment above.
+
+**On a review branch, not yet on `main`** — silhouette and proportions were
+checked by rendering the actual shipped files (not sketched from memory);
+`bellyM`/`radiusM`/trail-anchor values are independently re-measured and
+verified by `modelScale.test.mjs`, same as every other `CLASS_MODEL_REAL`
+entry. Still worth a human look before merging: these are original,
+unreviewed low-poly shapes, not sourced/vetted third-party assets.
