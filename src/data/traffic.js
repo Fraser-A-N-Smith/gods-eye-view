@@ -13,6 +13,7 @@ import {
 import { queuePlatoons, locateAlongRoad } from './trafficQueue.js';
 import { registerDynamicCredit, TOMTOM_CREDIT } from './dataCredits.js';
 import { holdContinuousRender, releaseContinuousRender } from '../renderGovernor.js';
+import { processInChunks } from './chunkedWork.js';
 
 /**
  * @file Street Traffic — animated dots along OSM road polylines, colored by
@@ -57,6 +58,14 @@ const OVERLAP_THRESHOLD = 0.6;
 const MAX_DOTS = 6000;
 /** @const {number} Polylines longer than this are simplified by sub-sampling */
 const MAX_WAYPOINTS_PER_ROAD = 80;
+/**
+ * @const {number} Roads parsed per event-loop turn before yielding. Each road
+ * costs one synchronous `scene.sampleHeight()` call, which is expensive
+ * enough that parsing a large viewport's roads in one unbroken pass blocks
+ * input and painting for the whole batch. Chunking keeps the main thread
+ * responsive while parsing runs across frames instead of freezing on one.
+ */
+const ROADS_PER_PARSE_CHUNK = 20;
 /** @const {number} Km — minimum viewport center shift before allowing refresh */
 const MIN_CENTER_SHIFT_KM = 0.35;
 /**
@@ -539,17 +548,26 @@ async function fetchRoads(
  *  3. Sample terrain height once at the first vertex (avoids per-vertex cost).
  *  4. Convert to Cartesian3 waypoints and pre-compute inter-vertex distances.
  *
+ * Ways are parsed in `ROADS_PER_PARSE_CHUNK`-sized batches, yielding to the
+ * event loop between batches (`processInChunks`, chunkedWork.js) so a large
+ * viewport's worth of `scene.sampleHeight()` calls — the expensive part —
+ * doesn't block the main thread for the whole response in one pass. If a
+ * newer load supersedes this one mid-parse (`generation` no longer matches
+ * `_loadGeneration`), parsing stops early since the result would be discarded
+ * by the caller's own generation check anyway.
+ *
  * @param {Object} overpassData - Raw JSON response from the Overpass API.
  * @param {Array}  overpassData.elements - Array of OSM elements.
- * @returns {Array<{coords:number[][], type:string, waypoints:Cesium.Cartesian3[], segmentDist:number[]}>}
+ * @param {number} [generation] - `_loadGeneration` at call time, for early-abort.
+ * @returns {Promise<Array<{coords:number[][], type:string, waypoints:Cesium.Cartesian3[], segmentDist:number[]}>>}
  *   Parsed road objects ready for dot spawning.
  */
-function parseRoads(overpassData) {
+async function parseRoads(overpassData, generation) {
   if (!overpassData || !overpassData.elements) return [];
 
   const roads = [];
-  for (const el of overpassData.elements) {
-    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+  await processInChunks(overpassData.elements, (el) => {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) return;
 
     const rawCoords = el.geometry.map(g => [g.lon, g.lat]);
 
@@ -569,7 +587,7 @@ function parseRoads(overpassData) {
       coords.push(last);
     }
 
-    if (coords.length < 2) continue;
+    if (coords.length < 2) return;
 
     const type = el.tags?.highway || 'unclassified';
     // One-way capture (field-test round 1: "a car would never go in
@@ -603,7 +621,10 @@ function parseRoads(overpassData) {
     }
 
     roads.push({ coords, type, oneway, waypoints, segmentDist });
-  }
+  }, {
+    chunkSize: ROADS_PER_PARSE_CHUNK,
+    shouldAbort: () => generation !== undefined && generation !== _loadGeneration,
+  });
 
   return roads;
 }
@@ -1813,7 +1834,7 @@ function markTrafficTimingMoveEnd() {
  * the normal function; debug-only clocks accumulate synchronous height and
  * waypoint-materialization time independently.
  */
-function parseRoadsTimed(overpassData, trace) {
+async function parseRoadsTimed(overpassData, generation, trace) {
   /* TRACE_ONLY_BEGIN */
   const _trafficTimingState = trafficTimingPass(trace, trace?.currentPass || 'full');
   const _trafficTimingParseStartTime = performance.now();
@@ -1851,10 +1872,12 @@ function parseRoadsTimed(overpassData, trace) {
   let _trafficTimingSampleHeightMs = 0;
   let _trafficTimingWaypointMaterializationMs = 0;
   /* TRACE_ONLY_END */
-  for (const el of overpassData.elements) {
-    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+  await processInChunks(overpassData.elements, (el) => {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) return;
 
     const rawCoords = el.geometry.map(g => [g.lon, g.lat]);
+
+    // Sub-sample long polylines: keep every Nth vertex to stay within budget
     const simplifyStep = rawCoords.length > MAX_WAYPOINTS_PER_ROAD
       ? Math.ceil(rawCoords.length / MAX_WAYPOINTS_PER_ROAD)
       : 1;
@@ -1863,19 +1886,26 @@ function parseRoadsTimed(overpassData, trace) {
       coords.push(rawCoords[i]);
     }
 
+    // Ensure the original endpoint is always preserved
     const last = rawCoords[rawCoords.length - 1];
     const tail = coords[coords.length - 1];
     if (!tail || tail[0] !== last[0] || tail[1] !== last[1]) {
       coords.push(last);
     }
-    if (coords.length < 2) continue;
+
+    if (coords.length < 2) return;
 
     const type = el.tags?.highway || 'unclassified';
+    // One-way capture (field-test round 1: "a car would never go in
+    // reverse"): dots on one-way roads all travel the legal direction.
+    // OSM: oneway=yes/1/true → digitization order; '-1' → reversed;
+    // roundabouts are one-way by definition. 0 = two-way (alternate).
     const onewayTag = el.tags?.oneway;
     const oneway = (onewayTag === 'yes' || onewayTag === '1' || onewayTag === 'true' || el.tags?.junction === 'roundabout')
       ? 1
       : (onewayTag === '-1' ? -1 : 0);
 
+    // Sample terrain height once at the road start to avoid per-vertex cost
     let baseHeight = 0;
     const firstCoord = coords[0];
     if (_viewer?.scene?.sampleHeightSupported && firstCoord) {
@@ -1897,10 +1927,13 @@ function parseRoadsTimed(overpassData, trace) {
     /* TRACE_ONLY_BEGIN */
     const _trafficTimingMaterializeStart = performance.now();
     /* TRACE_ONLY_END */
+    // Pre-compute Cartesian3 waypoints (lon, lat, height) for fast lerp animation
     const waypoints = coords.map(([lng, lat]) => {
       const h = baseHeight + DOT_HEIGHT_OFFSET;
       return Cesium.Cartesian3.fromDegrees(lng, lat, h);
     });
+
+    // Pre-compute segment distances in meters for speed-to-t conversion
     const segmentDist = [];
     for (let i = 0; i < waypoints.length - 1; i++) {
       segmentDist.push(Cesium.Cartesian3.distance(waypoints[i], waypoints[i + 1]));
@@ -1910,7 +1943,10 @@ function parseRoadsTimed(overpassData, trace) {
     /* TRACE_ONLY_END */
 
     roads.push({ coords, type, oneway, waypoints, segmentDist });
-  }
+  }, {
+    chunkSize: ROADS_PER_PARSE_CHUNK,
+    shouldAbort: () => generation !== undefined && generation !== _loadGeneration,
+  });
 
   /* TRACE_ONLY_BEGIN */
   const _trafficTimingMetrics = {
@@ -2005,7 +2041,7 @@ async function loadRoadsForBoundsTimed(bounds, altitude, expectedAnchor) {
 // Disabled-path contract: these references resolve directly to the original
 // functions. Instrumentation adds no load-path callbacks or per-item checks.
 const _parseRoads = TRAFFIC_TIMING_ENABLED
-  ? (data, trace) => (trace ? parseRoadsTimed(data, trace) : parseRoads(data))
+  ? (data, generation, trace) => (trace ? parseRoadsTimed(data, generation, trace) : parseRoads(data, generation))
   : parseRoads;
 const _loadRoadsForBounds = TRAFFIC_TIMING_ENABLED
   ? loadRoadsForBoundsTimed
@@ -2101,7 +2137,12 @@ async function loadRoadsForBounds(bounds, altitude, trace = null) {
       );
       // Discard stale response if a newer load was triggered while waiting
       if (generation !== _loadGeneration) return;
-      cache.major = _parseRoads(majorData, trace);
+      const parsedMajor = await _parseRoads(majorData, generation, trace);
+      // Parsing itself now spans multiple event-loop turns (chunkedWork.js) —
+      // re-check before committing to the shared tile cache so a superseded,
+      // only-partially-parsed result never gets cached as if it were complete.
+      if (generation !== _loadGeneration) return;
+      cache.major = parsedMajor;
       if (!await applyFlowThenRender(
         cache.major, clamped, generation, altitude, 'Loaded major', trace
       )) return;
@@ -2121,7 +2162,9 @@ async function loadRoadsForBounds(bounds, altitude, trace = null) {
     );
     if (generation !== _loadGeneration) return;
 
-    cache.full = _parseRoads(fullData, trace);
+    const parsedFull = await _parseRoads(fullData, generation, trace);
+    if (generation !== _loadGeneration) return;
+    cache.full = parsedFull;
     if (!await applyFlowThenRender(
       cache.full, clamped, generation, altitude, 'Loaded full', trace
     )) return;

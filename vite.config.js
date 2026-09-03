@@ -8359,7 +8359,13 @@ export default defineConfig(({ mode }) => {
       googlePlacesContextProxy(),
     ],
     server: {
-      host: env.HOST || 'localhost',
+      // Bind the literal loopback IPv4 address rather than the 'localhost'
+      // hostname: Node's DNS resolver can pick the IPv6 loopback (::1) for
+      // 'localhost' depending on OS config, which silently drops the IPv4
+      // listener and makes http://127.0.0.1:PORT (and sometimes
+      // http://localhost:PORT itself, depending on resolution order)
+      // connection-refused in the browser even though the server logs ready.
+      host: env.HOST || '127.0.0.1',
       port: parseInt(env.PORT, 10) || 5173,
       // When binding to all interfaces, allow any host; otherwise restrict to local names
       allowedHosts: (env.HOST === '0.0.0.0' || env.HOST === '::')
