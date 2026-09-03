@@ -17,6 +17,8 @@
  * reading is not a buoy reporting calm seas.
  */
 
+import { finiteOrNull } from './numeric.js';
+
 /** Column order of one NDBC `latest_obs.txt` data row, left to right. */
 const NDBC_COLUMNS = [
   'stn', 'lat', 'lon', 'yyyy', 'mm', 'dd', 'hh', 'mn',
@@ -67,4 +69,51 @@ export function parseNdbcLine(line) {
 export function parseNdbcText(text) {
   if (typeof text !== 'string') return [];
   return text.split('\n').map(parseNdbcLine).filter(Boolean);
+}
+
+/**
+ * Map one NOAA CO-OPS `datagetter` water-level response for a single station
+ * into the same record shape as an NDBC buoy observation (plus
+ * `stationType`/`waterLevelM`), tagged `stationType: 'co-ops-tide'` so the
+ * layer/analyst engine can tell the two station kinds apart.
+ *
+ * Unlike NDBC's single bulk `latest_obs.txt`, CO-OPS has no bulk "latest
+ * reading for every station" endpoint — each station's current water level
+ * is its own `datagetter` request. This is why God's Eye View ships a small,
+ * curated `config/co_ops_stations.json` (major US harbors only, same
+ * "curated subset" shape as `config/cbp_port_locations.json`) rather than
+ * querying CO-OPS's full station catalog live.
+ *
+ * Best-effort field mapping against CO-OPS's published `datagetter` JSON
+ * format (`{ data: [{ t, v, ... }] }`, one row per requested date/time) —
+ * worth re-checking against a live response before relying on this beyond
+ * "best-effort tide reading."
+ *
+ * @param {string} stationId - The CO-OPS station id this response is for.
+ * @param {{name:string, lat:number, lon:number}} location - The station's
+ *   entry from `config/co_ops_stations.json`.
+ * @param {object} payload - Parsed JSON body of one `datagetter` response.
+ * @returns {{id:string, lat:number, lon:number, name:string,
+ *   stationType:'co-ops-tide', waterLevelM:number|null,
+ *   windSpeedMs:null, waveHeightM:null, airTempC:null, waterTempC:null}|null}
+ */
+export function mapCoOpsStation(stationId, location, payload) {
+  if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lon)) return null;
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const latest = rows.at(-1);
+  // finiteOrNull, not Number(): Number('') === 0 (finite!) would turn a
+  // missing reading into "zero water level", a real value, not an absence.
+  const waterLevelM = finiteOrNull(latest?.v);
+  return {
+    id: `co-ops:${stationId}`,
+    lat: location.lat,
+    lon: location.lon,
+    name: location.name,
+    stationType: 'co-ops-tide',
+    waterLevelM,
+    windSpeedMs: null,
+    waveHeightM: null,
+    airTempC: null,
+    waterTempC: null,
+  };
 }

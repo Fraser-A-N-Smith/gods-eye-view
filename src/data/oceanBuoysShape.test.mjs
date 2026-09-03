@@ -4,7 +4,7 @@
 // server/client drift impossible rather than merely discouraged.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNdbcLine, parseNdbcText } from './oceanBuoysShape.js';
+import { parseNdbcLine, parseNdbcText, mapCoOpsStation } from './oceanBuoysShape.js';
 
 test('parseNdbcLine: parses a well-formed data row', () => {
   const line = '22101    37.24   126.02  2026 08 30 11 00  20   1.0    MM  0.0   0   MM  MM     MM    MM  25.0  26.2    MM   MM     MM';
@@ -77,4 +77,40 @@ test('parseNdbcText: non-string input yields an empty array', () => {
   assert.deepEqual(parseNdbcText(null), []);
   assert.deepEqual(parseNdbcText(undefined), []);
   assert.deepEqual(parseNdbcText(42), []);
+});
+
+// ── NOAA CO-OPS tide stations ────────────────────────────────────────────────
+
+const SF_LOCATION = { name: 'San Francisco, CA', lat: 37.8063, lon: -122.4659 };
+
+test('mapCoOpsStation: maps a well-formed datagetter response', () => {
+  const record = mapCoOpsStation('9414290', SF_LOCATION, { data: [{ t: '2026-08-31 12:00', v: '1.234' }] });
+  assert.deepEqual(record, {
+    id: 'co-ops:9414290', lat: 37.8063, lon: -122.4659, name: 'San Francisco, CA',
+    stationType: 'co-ops-tide', waterLevelM: 1.234,
+    windSpeedMs: null, waveHeightM: null, airTempC: null, waterTempC: null,
+  });
+});
+
+test('mapCoOpsStation: takes the latest row when multiple are returned', () => {
+  const record = mapCoOpsStation('9414290', SF_LOCATION, {
+    data: [{ t: '2026-08-31 11:54', v: '1.1' }, { t: '2026-08-31 12:00', v: '1.234' }],
+  });
+  assert.equal(record.waterLevelM, 1.234);
+});
+
+test('mapCoOpsStation: a missing/unparseable reading becomes null, not NaN or 0', () => {
+  assert.equal(mapCoOpsStation('9414290', SF_LOCATION, { data: [] }).waterLevelM, null);
+  assert.equal(mapCoOpsStation('9414290', SF_LOCATION, { data: [{ t: '2026-08-31 12:00', v: '' }] }).waterLevelM, null);
+  assert.equal(mapCoOpsStation('9414290', SF_LOCATION, {}).waterLevelM, null);
+});
+
+test('mapCoOpsStation: an unknown station (no location) returns null', () => {
+  assert.equal(mapCoOpsStation('9999999', undefined, { data: [{ v: '1.0' }] }), null);
+  assert.equal(mapCoOpsStation('9999999', null, { data: [{ v: '1.0' }] }), null);
+});
+
+test('mapCoOpsStation: output is JSON-safe', () => {
+  const record = mapCoOpsStation('9414290', SF_LOCATION, { data: [{ v: '1.0' }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(record)), record);
 });

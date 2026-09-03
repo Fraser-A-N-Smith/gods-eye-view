@@ -45,7 +45,7 @@ import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from '.
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
-import { parseNdbcText } from './src/data/oceanBuoysShape.js';
+import { parseNdbcText, mapCoOpsStation } from './src/data/oceanBuoysShape.js';
 import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
@@ -2531,11 +2531,77 @@ function oceanBuoysProxy() {
   const MAX_BUOYS = 900;
   const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ocean-buoys-v1.json');
   const BUOYS_URL = 'https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt';
-  const ATTRIBUTION = 'NOAA National Data Buoy Center (US public domain)';
+  const ATTRIBUTION = 'NOAA National Data Buoy Center + NOAA CO-OPS (US public domain)';
+  const COOPS_STATIONS_PATH = path.join(__dirname, 'config', 'co_ops_stations.json');
+  const COOPS_CONCURRENCY = 10;
+  const COOPS_TIMEOUT_MS = 6000;
 
   let cache = null;
   let diskLoaded = false;
+  let coOpsStations = null;
   const inFlight = new Map();
+
+  async function loadCoOpsStations() {
+    if (coOpsStations) return coOpsStations;
+    try {
+      coOpsStations = JSON.parse(await fsp.readFile(COOPS_STATIONS_PATH, 'utf8'));
+    } catch (error) {
+      console.warn(`[ocean-buoys-proxy] failed to load ${COOPS_STATIONS_PATH}: ${error?.message || error}`);
+      coOpsStations = {};
+    }
+    return coOpsStations;
+  }
+
+  function coOpsDataGetterUrl(stationId) {
+    const params = new URLSearchParams({
+      station: stationId,
+      product: 'water_level',
+      datum: 'MLLW',
+      units: 'metric',
+      time_zone: 'gmt',
+      format: 'json',
+      date: 'latest',
+      application: 'GodsEyeView',
+    });
+    return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?${params}`;
+  }
+
+  /** Best-effort single-station fetch — any failure drops the station, never throws. */
+  async function fetchCoOpsStation(stationId, location) {
+    try {
+      const response = await fetch(coOpsDataGetterUrl(stationId), {
+        signal: AbortSignal.timeout(COOPS_TIMEOUT_MS),
+      });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      return mapCoOpsStation(stationId, location, payload);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fan out over the curated CO-OPS station list with bounded concurrency —
+   * CO-OPS has no bulk "latest reading for every station" endpoint like
+   * NDBC's, so each station is its own request (see `mapCoOpsStation`'s doc
+   * comment in `oceanBuoysShape.js`). Every failure mode (timeout, non-2xx,
+   * malformed body, an unlisted station) degrades to dropping that one
+   * station — never throws, never affects NDBC-backed availability.
+   * @returns {Promise<Array<object>>}
+   */
+  async function fetchCoOpsStations() {
+    const stations = await loadCoOpsStations();
+    const ids = Object.keys(stations);
+    const results = [];
+    for (let i = 0; i < ids.length; i += COOPS_CONCURRENCY) {
+      const batch = ids.slice(i, i + COOPS_CONCURRENCY);
+      const settled = await Promise.allSettled(batch.map((id) => fetchCoOpsStation(id, stations[id])));
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
+      }
+    }
+    return results;
+  }
 
   async function loadDiskCache() {
     if (diskLoaded) return;
@@ -2574,8 +2640,13 @@ function oceanBuoysProxy() {
     }
     const buoys = parseNdbcText(text);
 
+    // CO-OPS tide stations are an optional supplemental source — their
+    // failure never affects NDBC-backed availability (same independent-
+    // degradation shape as DONKI/NeoWs on the space-weather panel).
+    const tideStations = await fetchCoOpsStations();
+
     const body = JSON.stringify({
-      buoys: buoys.slice(0, MAX_BUOYS),
+      buoys: [...buoys.slice(0, MAX_BUOYS), ...tideStations],
       retrievedAt: Date.now(),
       attribution: ATTRIBUTION,
     });

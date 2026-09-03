@@ -35,7 +35,16 @@ test('buoy analyst record: full record maps every contract field', () => {
     waveHeightM: 0.0,
     airTempC: 25.0,
     waterTempC: 26.2,
+    stationType: 'ndbc-buoy',
+    waterLevelM: null,
   });
+});
+
+test('buoy analyst record: stationType defaults to ndbc-buoy; a CO-OPS station passes waterLevelM through', () => {
+  assert.equal(mapAnalystRecord(FULL_RAW).stationType, 'ndbc-buoy');
+  const tide = mapAnalystRecord({ id: 'co-ops:9414290', lat: 37.8, lon: -122.5, stationType: 'co-ops-tide', waterLevelM: 1.23 });
+  assert.equal(tide.stationType, 'co-ops-tide');
+  assert.equal(tide.waterLevelM, 1.23);
 });
 
 test('buoy analyst record: missing id falls back to index-based id', () => {
@@ -117,6 +126,50 @@ test('buoy wave-height color bands: high wave is red, moderate is yellow, no rea
     assert.ok(byId['buoy:buoy-2'].point.color.getValue(now).equals(Cesium.Color.YELLOW));
     assert.ok(byId['buoy:buoy-3'].point.color.getValue(now).equals(Cesium.Color.GRAY),
       'a buoy with no wave-height reading must render gray, not calm-colored');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('CO-OPS tide stations render with a fixed color and a water-level label, distinct from NDBC buoys', async () => {
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createOceanBuoysLayer();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      buoys: [
+        { id: 'buoy-1', lat: 10, lon: 20, windSpeedMs: 5, waveHeightM: 5.5 },
+        {
+          id: 'co-ops:9414290', lat: 37.8063, lon: -122.4659, name: 'San Francisco, CA',
+          stationType: 'co-ops-tide', waterLevelM: 1.23,
+        },
+      ],
+    }),
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    await layer.update(viewer);
+
+    const entities = viewer._dataSources[0].entities.values;
+    const byId = Object.fromEntries(entities.map((e) => [e.id, e]));
+    const now = Cesium.JulianDate.now();
+
+    assert.ok(byId['buoy:buoy-1'].point.color.getValue(now).equals(Cesium.Color.RED), 'NDBC buoy keeps wave-height coloring');
+    assert.ok(
+      byId['buoy:co-ops:9414290'].point.color.getValue(now).equals(Cesium.Color.DODGERBLUE),
+      'CO-OPS station gets the fixed tide color',
+    );
+    assert.equal(byId['buoy:co-ops:9414290'].label.text.getValue(now), '1.23 m');
+
+    const records = layer.getAnalystRecords();
+    const tideRecord = records.find((r) => r.id === 'co-ops:9414290');
+    assert.equal(tideRecord.stationType, 'co-ops-tide');
+    assert.equal(tideRecord.waterLevelM, 1.23);
+    const buoyRecord = records.find((r) => r.id === 'buoy-1');
+    assert.equal(buoyRecord.stationType, 'ndbc-buoy');
   } finally {
     globalThis.fetch = originalFetch;
     layer.destroy(viewer);

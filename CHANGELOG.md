@@ -3,6 +3,21 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (d)
+
+### Added
+
+- The **Ocean Buoys** layer now also merges in real-time water level from a
+  curated set of ~25 major NOAA CO-OPS tide stations (US public domain),
+  rendered with a fixed distinct color and a water-level label
+  (`stationType: 'co-ops-tide'`) alongside the existing NDBC wave/wind
+  buoys. CO-OPS has no bulk "latest reading for every station" endpoint, so
+  each station is fetched individually with bounded concurrency (10 at a
+  time); any per-station failure drops that station without affecting
+  NDBC-backed availability. ⚠️ The `datagetter` response field mapping is a
+  best-effort mapping against CO-OPS's published format pending
+  live-schema verification.
+
 ## [Unreleased] — 2026-08-31 (c)
 
 ### Added

@@ -141,6 +141,13 @@ export const DATA_CREDITS = [
       '(US public domain)',
   },
   {
+    key: 'co-ops',
+    html:
+      'Tide station water levels (curated major US harbors): NOAA CO-OPS — ' +
+      '<a href="https://tidesandcurrents.noaa.gov" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'sondehub',
     html:
       'Radiosonde (weather balloon) positions: ' +
