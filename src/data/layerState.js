@@ -18,11 +18,14 @@ const PENDING_TRACKING_POLL_MS = 1_000;
 const TRACKING_ID_GRAMMAR = /^[0-9a-z~_-]{1,16}$/;
 /**
  * Ceilings for the untrusted v2 layer fields. Both are far above any legitimate
- * payload (16 one-character tokens; a dozen short option assignments), so a
- * value past them is malformed or hostile. Reject the WHOLE payload, matching
- * the unknown-token rule — never salvage a prefix.
+ * payload — every layer enabled at once is `2 * REGISTERED_LAYER_IDS.length - 1`
+ * dot-joined one-character tokens (36 layers → 71 chars as of 2026-08-31; kept
+ * with real headroom above that, not tuned to the current count) plus a dozen
+ * short option assignments — so a value past them is malformed or hostile.
+ * Reject the WHOLE payload, matching the unknown-token rule — never salvage a
+ * prefix.
  */
-const MAX_ENABLED_LAYERS_CHARS = 64;
+const MAX_ENABLED_LAYERS_CHARS = 160;
 const MAX_LAYER_OPTIONS_CHARS = 512;
 export const LAYER_STATE_STORAGE_KEY = 'gev:layer-state:v2';
 export const LAYER_RESTORE_ORIGINS = Object.freeze({
@@ -320,6 +323,7 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'military-awareness', token: 'g', disposition: 'enabled-only' }),
   Object.freeze({ id: 'military-installations', token: 'i', disposition: 'enabled-only' }),
   Object.freeze({ id: 'ocean-buoys', token: '3', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'openrailwaymap-tracks', token: '0', disposition: 'enabled-only' }),
   Object.freeze({ id: 'openseamap-seamarks', token: 'o', disposition: 'enabled-only' }),
   Object.freeze({ id: 'opensnowmap-pistes', token: 'y', disposition: 'enabled-only' }),
   Object.freeze({ id: 'radio', token: 'r', disposition: 'enabled+options', optionOwner: 'radio' }),
@@ -379,7 +383,12 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    if (!/^[a-z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // [a-z0-9] alone is 36 slots, exactly the current registry size — case is
+    // significant in the URL codec (no lowercasing anywhere in encode/decode),
+    // so widening to [a-zA-Z0-9] (62 slots) is a free, backward-compatible
+    // headroom increase: every already-issued lowercase/digit token keeps
+    // decoding identically.
+    if (!/^[a-zA-Z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

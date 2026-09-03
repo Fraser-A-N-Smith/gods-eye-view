@@ -17,6 +17,8 @@
  * reading is not a buoy reporting calm seas.
  */
 
+import { finiteOrNull } from './numeric.js';
+
 /** Column order of one NDBC `latest_obs.txt` data row, left to right. */
 const NDBC_COLUMNS = [
   'stn', 'lat', 'lon', 'yyyy', 'mm', 'dd', 'hh', 'mn',
@@ -24,11 +26,12 @@ const NDBC_COLUMNS = [
   'pres', 'ptdy', 'atmp', 'wtmp', 'dewp', 'vis', 'tide',
 ];
 
-/** `MM` (missing) → null. Otherwise a finite number, or null. */
+/** `MM` (missing) → null — NDBC's own sentinel, kept here rather than in
+ *  numeric.js since it is specific to this one upstream's text format.
+ *  Everything else routes through the shared `finiteOrNull`. */
 function ndbcNum(token) {
-  if (token === undefined || token === 'MM') return null;
-  const n = Number(token);
-  return Number.isFinite(n) ? n : null;
+  if (token === 'MM') return null;
+  return finiteOrNull(token);
 }
 
 /**

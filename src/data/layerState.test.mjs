@@ -163,15 +163,19 @@ function encode(state) {
  */
 function unregisteredToken() {
   const used = new Set(LAYER_STATE_REGISTRY.map((entry) => entry.token));
-  const free = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('').find((c) => !used.has(c));
+  // Tokens are [a-zA-Z0-9] (62 slots) — see the widening note in
+  // validateLayerStateRegistry. Lowercase+digits (36 slots) alone are fully
+  // spoken for by the current registry, so this must search the full grammar.
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const free = alphabet.split('').find((c) => !used.has(c));
   if (!free) throw new Error('no unregistered layer token remains for this test');
   return free;
 }
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  assert.equal(REGISTERED_LAYER_IDS.length, 35);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 35);
+  assert.equal(REGISTERED_LAYER_IDS.length, 36);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 36);
   assert.deepEqual(REGISTERED_LAYER_IDS, [...REGISTERED_LAYER_IDS].sort());
   assert.throws(
     () => validateLayerStateRegistry([...LAYER_STATE_REGISTRY, LAYER_STATE_REGISTRY[0]]),

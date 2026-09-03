@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { mapFireballRow, mapFireballRows } from './fireballsShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Fireballs — NASA/JPL Center for Near-Earth Object Studies (CNEOS) fireball
@@ -82,6 +83,7 @@ export function createFireballsLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'fireballs',
@@ -124,7 +126,9 @@ export function createFireballsLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const fireball of payload.fireballs) {
           const lat = Number(fireball?.lat);
@@ -137,7 +141,7 @@ export function createFireballsLayer() {
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = fireball.id || `fireball-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `fireball:${stableId}`,
             position,
             point: {
@@ -170,9 +174,11 @@ export function createFireballsLayer() {
               velocityKmS: Number.isFinite(fireball.velocityKmS) ? fireball.velocityKmS : null,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:Fireballs] Updated: ${_count} detections`);
@@ -193,6 +199,7 @@ export function createFireballsLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -234,6 +241,7 @@ export function createFireballsLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };

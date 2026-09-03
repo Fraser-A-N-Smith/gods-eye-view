@@ -23,6 +23,8 @@
  * guessed or fallback position.
  */
 
+import { finiteOrNull } from './numeric.js';
+
 /**
  * Map one raw CBP wait-time entry to a placeable crossing record by joining
  * it against the static `port_number -> {name, lat, lon}` lookup. Pure — no
@@ -45,12 +47,15 @@
  */
 export function mapWaitTimeEntry(entry, locations) {
   const portNumber = entry?.port_number;
-  const location = portNumber != null ? locations?.[portNumber] : null;
+  // Object.hasOwn (not `locations?.[portNumber]`) so a CBP entry reporting
+  // `port_number: "constructor"` (or any other Object.prototype key) can
+  // never resolve to a prototype method instead of a real, or absent, entry.
+  const location = portNumber != null && locations && Object.hasOwn(locations, portNumber)
+    ? locations[portNumber]
+    : null;
   if (!location) return null;
 
   const rawDelay = entry?.passenger_vehicle_lanes?.standard_lanes?.delay_minutes;
-  const delayText = String(rawDelay ?? '').trim();
-  const waitMinutes = delayText === '' ? null : Number(delayText);
 
   return {
     id: String(portNumber),
@@ -58,7 +63,7 @@ export function mapWaitTimeEntry(entry, locations) {
     border: entry?.border ?? null,
     lat: location.lat,
     lon: location.lon,
-    waitMinutes: Number.isFinite(waitMinutes) ? waitMinutes : null,
+    waitMinutes: finiteOrNull(rawDelay),
     status: entry?.port_status ?? null,
   };
 }

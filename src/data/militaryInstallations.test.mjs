@@ -272,6 +272,7 @@ async function runInstallationLoad({
   await militaryInstallationsLayer.update();
 
   return {
+    viewer,
     requests,
     cameraFlights,
     entities: () => dataSources[0]?.entities?.values || [],
@@ -696,6 +697,29 @@ test('zoom-out aborts an active installation request and returns non-loading gui
     else globalThis.document = originalDocument;
     if (originalWindow === undefined) delete globalThis.window;
     else globalThis.window = originalWindow;
+  }
+});
+
+test('zoom-out after a successful load clears rendered pins and records, not just the status', async () => {
+  // The bug: the zoom-in branch returned early without calling
+  // clearRendered() or resetting state.records, so pins from whatever
+  // viewport was last loaded stayed welded to the globe while the panel
+  // said "Zoom in to load" — the identical gap fixed in
+  // criticalInfrastructure.js's matching branch.
+  const run = await runInstallationLoad({
+    elements: [{
+      type: 'node', id: 42, lat: 30.5, lon: -97.5,
+      tags: { military: 'base', name: 'Runtime Installation' },
+    }],
+  });
+  try {
+    assert.ok(run.entities().length > 0, 'setup loaded at least one pin from the bounded viewport');
+    run.viewer.camera.computeViewRectangle = () => null;
+    await militaryInstallationsLayer.update();
+    assert.equal(run.stats().status, 'zoom-in');
+    assert.equal(run.entities().length, 0, 'pins from the last loaded viewport must not survive a zoom-out');
+  } finally {
+    run.restore();
   }
 });
 

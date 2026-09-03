@@ -56,6 +56,12 @@ export const DATA_CREDITS = [
       'Dr. T.S. Kelso',
   },
   {
+    key: 'open-notify',
+    html:
+      'ISS crew roster: ' +
+      '<a href="http://open-notify.org" target="_blank" rel="noopener">Open Notify</a>',
+  },
+  {
     key: 'launch-library-2',
     html:
       'Space mission launch, payload &amp; recovery metadata: ' +
@@ -258,6 +264,13 @@ export const DATA_CREDITS = [
     html:
       'Ski pistes, lifts and nordic trails: ' +
       '<a href="https://www.opensnowmap.org" target="_blank" rel="noopener">OpenSnowMap.org</a> ' +
+      '&amp; © OpenStreetMap contributors (ODbL 1.0)',
+  },
+  {
+    key: 'openrailwaymap',
+    html:
+      'Rail network overlay (tracks, stations, electrification): ' +
+      '<a href="https://www.openrailwaymap.org" target="_blank" rel="noopener">OpenRailwayMap</a> ' +
       '&amp; © OpenStreetMap contributors (ODbL 1.0)',
   },
   {

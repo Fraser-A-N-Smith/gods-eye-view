@@ -13,6 +13,7 @@ import rocketLaunchesLayer, {
   createRocketMissionMarkerOverlayEntry,
   formatMissionEventTime,
   LAUNCH_PAD_ZONE_RADIUS_M,
+  launchAzimuthForInclinationDeg,
   launchPadZoneVisible,
   launchStatusAllowsOrbit,
   missionAnchorHorizonVisible,
@@ -718,10 +719,14 @@ test('estimated mission orbit is a smooth planar ring', () => {
 });
 
 test('projects a west-coast ascent forward into orbit without reversing course', () => {
+  // Vandenberg (34.63N) genuinely flies its Sun-synchronous missions south —
+  // a real, physically-grounded reason for this specific direction, unlike
+  // the old fixed "western North America" heading bucket this orbit name
+  // used to fall into regardless of what orbit was actually being reached.
   const launchInfo = {
     lat: 34.63,
     lon: -120.61,
-    orbit: { name: 'Low Earth Orbit' },
+    orbit: { name: 'Sun-Synchronous Orbit' },
   };
   const launch = Cesium.Cartesian3.fromDegrees(launchInfo.lon, launchInfo.lat, 0);
   const orbit = approximateOrbitPath(launchInfo);
@@ -744,6 +749,91 @@ test('projects a west-coast ascent forward into orbit without reversing course',
     }),
   );
   assert.ok(minimumDirectionContinuity > Math.cos(Cesium.Math.toRadians(5)));
+});
+
+test('launch azimuth follows real published launch-azimuth ranges, not a fixed compass bucket', () => {
+  // Cape Canaveral (28.5N) launching to the ISS's real 51.6° inclination:
+  // published azimuths for these missions run roughly 44-52° (NE).
+  const capeCanaveralToIss = launchAzimuthForInclinationDeg(51.6, 28.5);
+  assert.ok(capeCanaveralToIss > 40 && capeCanaveralToIss < 55,
+    `expected a NE-quadrant azimuth near Cape Canaveral's real ISS launches, got ${capeCanaveralToIss}`);
+
+  // Vandenberg (34.63N) launching to a real ~97.8° Sun-synchronous orbit:
+  // published azimuths for these missions run roughly 180-201° (S/SSW).
+  const vandenbergToSso = launchAzimuthForInclinationDeg(97.8, 34.63);
+  assert.ok(vandenbergToSso > 175 && vandenbergToSso < 210,
+    `expected a south-quadrant azimuth near Vandenberg's real Sun-sync launches, got ${vandenbergToSso}`);
+
+  // Due-east from the equator reaches the minimum inclination directly.
+  assert.ok(Math.abs(launchAzimuthForInclinationDeg(0, 0) - 90) < 1e-6);
+});
+
+test('an inclination below the launch site latitude clamps to the achievable minimum instead of an impossible azimuth', () => {
+  // A 0° (equatorial) target from a 45° site cannot be reached without a
+  // plane-change dogleg — clamp to the cheapest direct-ascent inclination
+  // (the site's own latitude), which is a due-east launch.
+  assert.equal(launchAzimuthForInclinationDeg(0, 45), 90);
+});
+
+test('a Geostationary Transfer Orbit renders as a real elongated ellipse, not a circle at GEO altitude', () => {
+  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const orbit = approximateOrbitPath({
+    lat: 28.5,
+    lon: -80.6,
+    orbit: { name: 'Geostationary Transfer Orbit' },
+  });
+  const radii = orbit.map((position) => Cesium.Cartesian3.magnitude(position));
+  const perigeeRadius = Math.min(...radii);
+  const apogeeRadius = Math.max(...radii);
+
+  // The old approximation drew this as a perfect circle at GEO altitude —
+  // a transfer orbit is defined by having a low perigee and a high apogee.
+  assert.ok(apogeeRadius - perigeeRadius > 30_000_000,
+    'a transfer orbit must be visibly elongated, not a circle');
+  assert.ok(perigeeRadius - earthRadius < 1_000_000,
+    'perigee should sit near a low parking-orbit altitude');
+  assert.ok(apogeeRadius - earthRadius > 34_000_000,
+    'apogee should reach up near geostationary altitude');
+});
+
+test('a final Geostationary orbit stays a circle at GEO altitude — only the transfer orbit is elliptical', () => {
+  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const orbit = approximateOrbitPath({
+    lat: 5.2,
+    lon: -52.8,
+    orbit: { name: 'Geostationary Orbit' },
+  });
+  const radii = orbit.map((position) => Cesium.Cartesian3.magnitude(position));
+  assert.ok(Math.max(...radii) - Math.min(...radii) < 1,
+    'a settled GEO orbit is circular');
+  assert.ok(Math.abs(radii[0] - (earthRadius + 35786000)) < 1,
+    'GEO radius should match the real geostationary altitude');
+});
+
+test('a final Geostationary orbit is equatorial regardless of the launch site latitude', () => {
+  // Real GEO satellites reach the equatorial plane via a later apogee-kick
+  // plane-change burn — the ring must not inherit the pad's own latitude the
+  // way a directly-reached orbit (GTO, LEO, …) does.
+  const orbit = approximateOrbitPath({
+    lat: 45.9, // Baikonur — far from the equator
+    lon: 63.3,
+    orbit: { name: 'Geostationary Orbit' },
+  });
+  for (const position of orbit) {
+    assert.ok(Math.abs(position.z) < 1, 'every point on a GEO ring must sit on the equatorial plane');
+  }
+});
+
+test('a Molniya orbit is highly eccentric, matching its real published apsides', () => {
+  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const orbit = approximateOrbitPath({
+    lat: 62.8,
+    lon: 40.7,
+    orbit: { name: 'Molniya Orbit' },
+  });
+  const radii = orbit.map((position) => Cesium.Cartesian3.magnitude(position));
+  assert.ok(Math.min(...radii) - earthRadius < 1_000_000, 'Molniya perigee is low');
+  assert.ok(Math.max(...radii) - earthRadius > 39_000_000, 'Molniya apogee is far beyond GEO altitude');
 });
 
 test('formats the launch epoch for ascent and orbit replay labels', () => {

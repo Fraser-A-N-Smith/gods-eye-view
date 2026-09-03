@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { parseNdbcLine, parseNdbcText } from './oceanBuoysShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Ocean Buoys — NOAA National Data Buoy Center (NDBC) `latest_obs.txt`,
@@ -90,6 +91,7 @@ export function createOceanBuoysLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'ocean-buoys',
@@ -132,7 +134,9 @@ export function createOceanBuoysLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const buoy of payload.buoys) {
           const lat = Number(buoy?.lat);
@@ -146,7 +150,7 @@ export function createOceanBuoysLayer() {
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = buoy.id || `buoy-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `buoy:${stableId}`,
             position,
             point: {
@@ -178,9 +182,11 @@ export function createOceanBuoysLayer() {
               waterTempC: Number.isFinite(buoy.waterTempC) ? buoy.waterTempC : null,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:OceanBuoys] Updated: ${_count} buoys`);
@@ -201,6 +207,7 @@ export function createOceanBuoysLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -241,6 +248,7 @@ export function createOceanBuoysLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };

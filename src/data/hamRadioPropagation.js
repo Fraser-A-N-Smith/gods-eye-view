@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { maidenheadToLatLon, parsePskReporterXml } from './hamRadioPropagationShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Ham Radio Propagation — PSKReporter.info amateur radio reception reports
@@ -97,6 +98,7 @@ export function createHamRadioPropagationLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'ham-radio-propagation',
@@ -139,7 +141,9 @@ export function createHamRadioPropagationLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const spot of payload.spots) {
           const senderLat = Number(spot?.senderLat);
@@ -156,7 +160,7 @@ export function createHamRadioPropagationLayer() {
           const receiverPos = Cesium.Cartesian3.fromDegrees(receiverLon, receiverLat);
           const stableId = spot.id || `spot-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `ham-radio:${stableId}`,
             polyline: {
               // Static positions — see the module header. This is an arc
@@ -183,9 +187,11 @@ export function createHamRadioPropagationLayer() {
               snr,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:HamRadioPropagation] Updated: ${_count} spots`);
@@ -206,6 +212,7 @@ export function createHamRadioPropagationLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -247,6 +254,7 @@ export function createHamRadioPropagationLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };
