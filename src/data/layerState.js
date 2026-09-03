@@ -301,6 +301,7 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'radio', token: 'r', disposition: 'enabled+options', optionOwner: 'radio' }),
   Object.freeze({ id: 'rainviewer-radar', token: 'j', disposition: 'enabled-only' }),
   Object.freeze({ id: 'rainviewer-satellite', token: '1', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'reference-boundaries-labels', token: 'rb', disposition: 'enabled-only' }),
   Object.freeze({ id: 'rocket-launches', token: 'x', disposition: 'enabled-only' }),
   Object.freeze({ id: 'satellites', token: 's', disposition: 'enabled+options', optionOwner: 'satellites' }),
   Object.freeze({ id: 'space-weather', token: 'z', disposition: 'enabled-only' }),
@@ -355,7 +356,13 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    if (!/^[a-z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // Tokens are '.'-joined in the wire format (see encode/decodeLayerStateParams),
+    // so length is not load-bearing for parsing — only exact-match lookup is.
+    // Every single a-z0-9 character is now spoken for by an existing layer
+    // (see docs/superpowers/plans/2026-08-31-logistics-rail-apis.md), so new
+    // entries take a two-character token instead of the increasingly scarce
+    // one-character space.
+    if (!/^[a-z0-9]{1,2}$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

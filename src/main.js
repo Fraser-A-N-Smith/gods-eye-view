@@ -297,10 +297,11 @@ async function init() {
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
     dataManager.register(vesselEventsLayer);
-    // OpenSeaMap sea marks and OpenSnowMap pistes — transparent raster
-    // overlays composited onto the Cesium globe, independently toggleable.
-    // They render only on a globe-imagery stack; each layer reports that
-    // itself rather than silently drawing nothing under Google 3D.
+    // OpenSeaMap sea marks, OpenSnowMap pistes, OpenRailwayMap rail, and the
+    // CARTO borders/place-names reference layer — transparent raster overlays
+    // composited onto the Cesium globe, independently toggleable. They render
+    // only on a globe-imagery stack; each layer reports that itself rather
+    // than silently drawing nothing under Google 3D.
     for (const overlay of rasterOverlayLayers) {
       dataManager.register(overlay);
     }
