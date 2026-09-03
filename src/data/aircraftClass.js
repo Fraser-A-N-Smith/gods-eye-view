@@ -145,8 +145,8 @@ export const CLASS_MODEL_URL = {
  *  bellyM = origin→lowest-vertex distance (grounded-model lift, replaces the
  *  airplane.glb MODEL_BELLY_OFFSET_NATIVE formula); radiusM = bounding-sphere
  *  radius in meters (pixel-size math). Values measured from the shipped GLBs —
- *  pinned by modelScale.test.mjs. Classes NOT listed (airliner, quadjet,
- *  glider, fastjet) still render the shared airplane.glb via CLASS_MODEL_URL. */
+ *  pinned by modelScale.test.mjs. Classes NOT listed (glider, fastjet) still
+ *  render the shared airplane.glb via CLASS_MODEL_URL. */
 export const CLASS_MODEL_REAL = {
   helicopter: { url: '/models/bell206.glb',   bellyM: 1.66, radiusM: 8.24 },
   light:      { url: '/models/c172.glb',      bellyM: 1.36, radiusM: 7.0 },
@@ -154,4 +154,12 @@ export const CLASS_MODEL_REAL = {
   uav:        { url: '/models/mq9.glb',       bellyM: 2.02, radiusM: 12.0 },
   widebody:   { url: '/models/b789.glb',      bellyM: 7.81, radiusM: 44.08 },
   turboprop:  { url: '/models/atr72.glb',     bellyM: 3.81, radiusM: 19.49 },
+  // 2026-08-31 addition: real narrow-body (A320) and quad-engine widebody
+  // (A380) assets — airliner was the app's single most common class and the
+  // biggest visual-fidelity gap (a scaled-down 747 mesh); quadjet gets its
+  // own asset instead of leaning on the shared 747 fallback. Both sourced
+  // from amvlab/aircraft-models (CC BY 4.0) and re-baked to this project's
+  // convention (public/models/README.md has the exact transform).
+  airliner:   { url: '/models/a320.glb',      bellyM: 5.66, radiusM: 26.49 },
+  quadjet:    { url: '/models/a380.glb',      bellyM: 10.96, radiusM: 54.85 },
 };

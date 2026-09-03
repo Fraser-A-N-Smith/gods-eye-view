@@ -18,9 +18,16 @@
  * assigning a fresh positions array per update is cheap. `allowPicking` has
  * no entity equivalent; the polyline entity is excluded from clicks by never
  * carrying a pick id the layers' click handlers resolve.
+ *
+ * `setPositions` runs the deduped fixes through `trailSmoothing.js` before
+ * drawing: every real fix still lands in the rendered geometry unchanged
+ * (still "show actual tracks"), but a turn between two close fixes now reads
+ * as a curve instead of the raw chord's hard kink — the tail-side match to
+ * the live icon's own arc-integrated motion in `motionModel.js`.
  */
 import * as Cesium from 'cesium';
 import { registerPickOwner } from './pickRegistry.js';
+import { smoothTrailPositions } from './trailSmoothing.js';
 
 // Round 6: trail ENTITIES are pickable (the old Primitive had
 // allowPicking:false). A trail hugs its aircraft, so an unclaimed pick would
@@ -101,7 +108,11 @@ export function createTrail(viewer, { color, width = 2.5 }) {
         if (last && Cesium.Cartesian3.distanceSquared(last, position) < MIN_SEGMENT_DISTANCE_SQ) continue;
         positions.push(position);
       }
-      current = positions.length >= 2 ? positions : [];
+      // Curve through the real, deduped fixes for display — see
+      // trailSmoothing.js: every real position above still reappears
+      // unchanged, this only inserts interior points between them so a turn
+      // reads as a curve instead of the raw chord's hard kink.
+      current = positions.length >= 2 ? smoothTrailPositions(positions) : [];
       ensureEntity();
     },
 

@@ -63,7 +63,11 @@ test('unknown-only v2 layer tokens are invalid, while historical l fields stay i
   // Derived, not hardcoded — see the same note in layerState.test.mjs. A
   // literal token here becomes a no-op test the day someone registers it.
   const used = new Set(LAYER_STATE_REGISTRY.map((entry) => entry.token));
-  const unknown = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('').find((c) => !used.has(c));
+  // Tokens are [a-zA-Z0-9] (62 slots) — lowercase+digits alone (36 slots) are
+  // fully spoken for by the current registry. See the same note in
+  // layerState.test.mjs's unregisteredToken().
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const unknown = alphabet.split('').find((c) => !used.has(c));
   assert.ok(unknown, 'no unregistered layer token remains for this test');
   const invalid = makeManager(`#v=2&lat=10&lon=20&l=${unknown}`).parseInitialHash();
   assert.equal(invalid.layerState, null);

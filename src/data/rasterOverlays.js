@@ -115,7 +115,7 @@ export const RASTER_OVERLAYS = Object.freeze([
     name: 'Borders & Labels',
     icon: '🏷️',
     source: 'CARTO',
-    token: 'rb',
+    token: 'B',
     // CARTO's "dark matter, labels only" style: transparent PNG carrying just
     // country/state-level administrative boundary lines and place-name text
     // (countries, states/provinces, cities and towns), styled with a dark

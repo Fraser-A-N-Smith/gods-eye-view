@@ -7,6 +7,8 @@ import militaryFlightsLayer from './data/militaryFlights.js';
 import earthquakesLayer from './data/earthquakes.js';
 import firePerimetersLayer from './data/firePerimeters.js';
 import gdeltEventsLayer from './data/gdeltEvents.js';
+import gdeltCameoEventsLayer from './data/gdeltCameoEvents.js';
+import acledEventsLayer from './data/acledEvents.js';
 import globalHazardsLayer from './data/globalHazards.js';
 import volcanoesLayer from './data/volcanoes.js';
 import oceanBuoysLayer from './data/oceanBuoys.js';
@@ -286,6 +288,7 @@ async function init() {
     dataManager.register(earthquakesLayer);
     dataManager.register(firePerimetersLayer);
     dataManager.register(gdeltEventsLayer);
+    dataManager.register(gdeltCameoEventsLayer);
     dataManager.register(globalHazardsLayer);
     dataManager.register(volcanoesLayer);
     dataManager.register(oceanBuoysLayer);
@@ -297,6 +300,7 @@ async function init() {
     dataManager.register(weatherAlertsLayer);
     dataManager.register(tropicalCyclonesLayer);
     dataManager.register(vesselEventsLayer);
+    dataManager.register(acledEventsLayer);
     // OpenSeaMap sea marks, OpenSnowMap pistes, OpenRailwayMap rail, and the
     // CARTO borders/place-names reference layer — transparent raster overlays
     // composited onto the Cesium globe, independently toggleable. They render

@@ -200,7 +200,7 @@ const LAYERS = [
     driveFleetModel: flightsDriveFleetModel,
     ensureFleetModel: flightsEnsureFleetModel,
     trackedBillboardColor: flightsTrackedBillboardColor,
-    bellyM: 6.719,
+    bellyM: 5.66, // airliner's own real-asset belly offset (aircraftClass.js CLASS_MODEL_REAL)
     seed({ viewer, tracked = true, icao24 = ICAO, modelCollection = null, onGround = false, models = [] }) {
       const billboard = contactBillboard();
       _setTrackedFlightRefreshStateForTest({
