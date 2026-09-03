@@ -45,6 +45,7 @@ import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from '.
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature, mapVolcanoNotice, mergeVolcanoAlerts } from './src/data/volcanoesShape.js';
+import { mapDiseaseOutbreakFeed } from './src/data/diseaseOutbreaksShape.js';
 import { parseNdbcText, mapCoOpsStation } from './src/data/oceanBuoysShape.js';
 import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
@@ -2538,6 +2539,126 @@ function volcanoesProxy() {
 
   return {
     name: 'volcanoes-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * Disease Outbreaks proxy — WHO Disease Outbreak News (DON), the app's
+ * first health/epidemiological event category.
+ *
+ * ⚠️ WHO's DON API's exact endpoint and JSON shape could not be verified
+ * against a live response while building this (sandboxed network access) —
+ * `DON_URL` below and `mapDiseaseOutbreakFeed`'s tolerant response-wrapper
+ * handling (bare array / `{value:[...]}` / `{result:[...]}`) are a
+ * best-effort guess at WHO's Sitecore-backed news API pattern, worth
+ * re-checking against a live response. Every failure mode (wrong endpoint,
+ * unexpected shape, network error) degrades to zero outbreak notices, never
+ * a crash or a stale-forever cache poisoned with garbage.
+ *
+ * DON entries are sparse and country-granular (see `diseaseOutbreaksShape.js`
+ * for the centroid-resolution/"no match, no plot" discipline), so a daily
+ * TTL is generous, not aggressive.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function diseaseOutbreaksProxy() {
+  const TTL_MS = 24 * 60 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_OUTBREAKS = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'disease-outbreaks-v1.json');
+  const DON_URL = 'https://www.who.int/api/news/diseaseoutbreaknews';
+  const ATTRIBUTION = 'World Health Organization — Disease Outbreak News';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[disease-outbreaks-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(DON_URL, { signal: AbortSignal.timeout(15000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const outbreaks = mapDiseaseOutbreakFeed(parsed, MAX_OUTBREAKS);
+
+    const body = JSON.stringify({
+      outbreaks,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/disease-outbreaks', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'disease-outbreaks', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[disease-outbreaks-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        // No cache and upstream failed: rather than a hard error, serve an
+        // empty (not stale, not an error) payload — a plausible schema/
+        // endpoint mismatch should read as "no notices," not break the toggle.
+        send(res, 200, JSON.stringify({ outbreaks: [], retrievedAt: Date.now(), attribution: ATTRIBUTION }), 'NONE');
+        console.warn(`[disease-outbreaks-proxy] upstream unavailable (${error?.message || error}) — serving empty`);
+      }
+    });
+  }
+
+  return {
+    name: 'disease-outbreaks-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9806,6 +9927,7 @@ export default defineConfig(({ mode }) => {
       spaceWeatherProxy(),
       globalHazardsProxy(),
       volcanoesProxy(),
+      diseaseOutbreaksProxy(),
       oceanBuoysProxy(),
       sondehubProxy(),
       hamRadioProxy(),

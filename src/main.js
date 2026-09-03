@@ -9,6 +9,7 @@ import firePerimetersLayer from './data/firePerimeters.js';
 import gdeltEventsLayer from './data/gdeltEvents.js';
 import globalHazardsLayer from './data/globalHazards.js';
 import volcanoesLayer from './data/volcanoes.js';
+import diseaseOutbreaksLayer from './data/diseaseOutbreaks.js';
 import oceanBuoysLayer from './data/oceanBuoys.js';
 import sondehubLayer from './data/sondehub.js';
 import hamRadioPropagationLayer from './data/hamRadioPropagation.js';
@@ -288,6 +289,7 @@ async function init() {
     dataManager.register(gdeltEventsLayer);
     dataManager.register(globalHazardsLayer);
     dataManager.register(volcanoesLayer);
+    dataManager.register(diseaseOutbreaksLayer);
     dataManager.register(oceanBuoysLayer);
     dataManager.register(sondehubLayer);
     dataManager.register(hamRadioPropagationLayer);

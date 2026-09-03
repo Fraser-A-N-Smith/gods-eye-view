@@ -3,6 +3,20 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (f)
+
+### Added
+
+- Added a **Disease Outbreaks** layer (WHO Disease Outbreak News) — the
+  app's first health/epidemiological event category. WHO reports at
+  country granularity, not lat/lon, so each notice is placed at its
+  country's approximate position via a new curated `countryCentroids.js`
+  lookup (~150 countries; an unmatched country is dropped, not guessed
+  at). Colored by recency (30/180-day bands). Keyless. ⚠️ WHO's DON API's
+  exact endpoint and JSON shape are a best-effort guess pending
+  live-schema verification — a wrong guess degrades to zero notices, not
+  a crash.
+
 ## [Unreleased] — 2026-08-31 (e)
 
 ### Added

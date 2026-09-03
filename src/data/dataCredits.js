@@ -134,6 +134,12 @@ export const DATA_CREDITS = [
       '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
   },
   {
+    key: 'who-don',
+    html:
+      'Disease outbreak notices: ' +
+      '<a href="https://www.who.int/emergencies/disease-outbreak-news" target="_blank" rel="noopener">World Health Organization — Disease Outbreak News</a>',
+  },
+  {
     key: 'usgs-vns',
     html:
       'Live US volcano alert status: ' +

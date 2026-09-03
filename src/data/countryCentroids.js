@@ -1,0 +1,238 @@
+/**
+ * @module data/countryCentroids
+ * @description A small, curated country-name → approximate-position lookup
+ * (capital-city coordinates, not a calculated area centroid — "a reasonable
+ * point for this country," same spirit as this project's other curated
+ * reference tables, e.g. `config/cbp_port_locations.json`).
+ *
+ * Built for the Disease Outbreaks layer (WHO Disease Outbreak News reports
+ * at country granularity, not lat/lon) but deliberately generic — any future
+ * country-level source can reuse it.
+ *
+ * Coverage is a curated ~150 countries, not all ~195 UN member states —
+ * chosen to cover the countries that most commonly appear in WHO/global
+ * health and disaster reporting. A name with no match returns null and is
+ * dropped by the caller rather than guessed at, the same "no match, no
+ * plot" discipline used for CBP Border Wait Times' curated port list.
+ */
+
+/** Canonical name → [lat, lon] (capital-city coordinates). */
+const COUNTRY_CENTROIDS = Object.freeze({
+  'afghanistan': [34.53, 69.17],
+  'albania': [41.33, 19.82],
+  'algeria': [36.75, 3.06],
+  'angola': [-8.84, 13.23],
+  'argentina': [-34.60, -58.38],
+  'armenia': [40.18, 44.51],
+  'australia': [-35.28, 149.13],
+  'austria': [48.21, 16.37],
+  'azerbaijan': [40.41, 49.87],
+  'bangladesh': [23.81, 90.41],
+  'belarus': [53.90, 27.57],
+  'belgium': [50.85, 4.35],
+  'benin': [6.50, 2.60],
+  'bolivia': [-16.50, -68.15],
+  'bosnia and herzegovina': [43.86, 18.41],
+  'botswana': [-24.65, 25.91],
+  'brazil': [-15.79, -47.88],
+  'bulgaria': [42.70, 23.32],
+  'burkina faso': [12.37, -1.53],
+  'burundi': [-3.43, 29.93],
+  'cambodia': [11.56, 104.92],
+  'cameroon': [3.87, 11.52],
+  'canada': [45.42, -75.70],
+  'central african republic': [4.39, 18.56],
+  'chad': [12.10, 15.04],
+  'chile': [-33.45, -70.65],
+  'china': [39.90, 116.40],
+  'colombia': [4.71, -74.07],
+  'democratic republic of the congo': [-4.44, 15.27],
+  'congo': [-4.26, 15.28],
+  'costa rica': [9.93, -84.09],
+  "cote d'ivoire": [6.83, -5.28],
+  'croatia': [45.81, 15.98],
+  'cuba': [23.13, -82.38],
+  'cyprus': [35.19, 33.38],
+  'czechia': [50.08, 14.44],
+  'denmark': [55.68, 12.57],
+  'djibouti': [11.59, 43.15],
+  'dominican republic': [18.49, -69.93],
+  'ecuador': [-0.18, -78.47],
+  'egypt': [30.04, 31.24],
+  'el salvador': [13.69, -89.22],
+  'equatorial guinea': [3.75, 8.78],
+  'eritrea': [15.32, 38.93],
+  'estonia': [59.44, 24.75],
+  'eswatini': [-26.32, 31.13],
+  'ethiopia': [9.03, 38.74],
+  'fiji': [-18.14, 178.44],
+  'finland': [60.17, 24.94],
+  'france': [48.86, 2.35],
+  'gabon': [0.42, 9.45],
+  'gambia': [13.45, -16.58],
+  'georgia': [41.72, 44.79],
+  'germany': [52.52, 13.40],
+  'ghana': [5.60, -0.19],
+  'greece': [37.98, 23.73],
+  'guatemala': [14.63, -90.51],
+  'guinea': [9.51, -13.71],
+  'guinea-bissau': [11.86, -15.60],
+  'guyana': [6.80, -58.16],
+  'haiti': [18.59, -72.31],
+  'honduras': [14.07, -87.19],
+  'hungary': [47.50, 19.04],
+  'iceland': [64.15, -21.94],
+  'india': [28.61, 77.21],
+  'indonesia': [-6.21, 106.85],
+  'iran': [35.69, 51.39],
+  'iraq': [33.31, 44.36],
+  'ireland': [53.35, -6.26],
+  'israel': [31.77, 35.21],
+  'italy': [41.90, 12.50],
+  'jamaica': [17.97, -76.79],
+  'japan': [35.68, 139.65],
+  'jordan': [31.95, 35.93],
+  'kazakhstan': [51.18, 71.45],
+  'kenya': [-1.29, 36.82],
+  'kuwait': [29.38, 47.99],
+  'kyrgyzstan': [42.87, 74.59],
+  'laos': [17.97, 102.60],
+  'latvia': [56.95, 24.11],
+  'lebanon': [33.89, 35.50],
+  'lesotho': [-29.31, 27.48],
+  'liberia': [6.30, -10.80],
+  'libya': [32.89, 13.19],
+  'lithuania': [54.69, 25.28],
+  'madagascar': [-18.88, 47.51],
+  'malawi': [-13.96, 33.79],
+  'malaysia': [3.14, 101.69],
+  'mali': [12.65, -8.00],
+  'mauritania': [18.08, -15.98],
+  'mexico': [19.43, -99.13],
+  'moldova': [47.01, 28.86],
+  'mongolia': [47.89, 106.91],
+  'morocco': [34.02, -6.83],
+  'mozambique': [-25.97, 32.57],
+  'myanmar': [19.76, 96.08],
+  'namibia': [-22.56, 17.08],
+  'nepal': [27.72, 85.32],
+  'netherlands': [52.37, 4.90],
+  'new zealand': [-41.29, 174.78],
+  'nicaragua': [12.11, -86.24],
+  'niger': [13.51, 2.11],
+  'nigeria': [9.08, 7.40],
+  'north korea': [39.04, 125.75],
+  'north macedonia': [41.99, 21.43],
+  'norway': [59.91, 10.75],
+  'oman': [23.59, 58.41],
+  'pakistan': [33.68, 73.05],
+  'panama': [8.98, -79.52],
+  'papua new guinea': [-9.44, 147.18],
+  'paraguay': [-25.28, -57.63],
+  'peru': [-12.05, -77.04],
+  'philippines': [14.60, 120.98],
+  'poland': [52.23, 21.01],
+  'portugal': [38.72, -9.14],
+  'qatar': [25.29, 51.53],
+  'romania': [44.43, 26.10],
+  'russia': [55.75, 37.62],
+  'rwanda': [-1.94, 30.06],
+  'saudi arabia': [24.71, 46.68],
+  'senegal': [14.72, -17.47],
+  'serbia': [44.79, 20.45],
+  'sierra leone': [8.48, -13.23],
+  'singapore': [1.35, 103.82],
+  'slovakia': [48.15, 17.11],
+  'slovenia': [46.06, 14.51],
+  'somalia': [2.05, 45.32],
+  'south africa': [-25.75, 28.19],
+  'south korea': [37.57, 126.98],
+  'south sudan': [4.85, 31.58],
+  'spain': [40.42, -3.70],
+  'sri lanka': [6.93, 79.85],
+  'sudan': [15.50, 32.56],
+  'suriname': [5.87, -55.17],
+  'sweden': [59.33, 18.06],
+  'switzerland': [46.95, 7.45],
+  'syria': [33.51, 36.28],
+  'taiwan': [25.03, 121.57],
+  'tajikistan': [38.54, 68.78],
+  'tanzania': [-6.16, 35.75],
+  'thailand': [13.75, 100.50],
+  'timor-leste': [-8.56, 125.57],
+  'togo': [6.13, 1.22],
+  'tunisia': [36.81, 10.18],
+  'turkey': [39.93, 32.86],
+  'turkmenistan': [37.95, 58.38],
+  'uganda': [0.35, 32.58],
+  'ukraine': [50.45, 30.52],
+  'united arab emirates': [24.45, 54.38],
+  'united kingdom': [51.51, -0.13],
+  'united states of america': [38.91, -77.04],
+  'uruguay': [-34.90, -56.16],
+  'uzbekistan': [41.30, 69.24],
+  'vanuatu': [-17.73, 168.32],
+  'venezuela': [10.49, -66.88],
+  'vietnam': [21.03, 105.85],
+  'yemen': [15.37, 44.19],
+  'zambia': [-15.39, 28.32],
+  'zimbabwe': [-17.83, 31.05],
+});
+
+/** Common alternate spellings/short forms mapped to a canonical key above. */
+const COUNTRY_ALIASES = Object.freeze({
+  'united states': 'united states of america',
+  'usa': 'united states of america',
+  'us': 'united states of america',
+  'uk': 'united kingdom',
+  'great britain': 'united kingdom',
+  'drc': 'democratic republic of the congo',
+  'dr congo': 'democratic republic of the congo',
+  'congo, democratic republic of the': 'democratic republic of the congo',
+  'congo (kinshasa)': 'democratic republic of the congo',
+  'congo (brazzaville)': 'congo',
+  'republic of the congo': 'congo',
+  'south korea, republic of': 'south korea',
+  'republic of korea': 'south korea',
+  'korea, republic of': 'south korea',
+  "democratic people's republic of korea": 'north korea',
+  'korea, democratic people\'s republic of': 'north korea',
+  'ivory coast': "cote d'ivoire",
+  "côte d'ivoire": "cote d'ivoire",
+  'czech republic': 'czechia',
+  'burma': 'myanmar',
+  'russian federation': 'russia',
+  'syrian arab republic': 'syria',
+  'viet nam': 'vietnam',
+  'lao pdr': 'laos',
+  "lao people's democratic republic": 'laos',
+  'iran, islamic republic of': 'iran',
+  'venezuela, bolivarian republic of': 'venezuela',
+  'bolivia, plurinational state of': 'bolivia',
+  'tanzania, united republic of': 'tanzania',
+  'moldova, republic of': 'moldova',
+  'eswatini (swaziland)': 'eswatini',
+  'swaziland': 'eswatini',
+  'cabo verde': 'cape verde',
+});
+
+/** Strip diacritics and normalize case/whitespace for tolerant name matching. */
+function normalizeCountryName(name) {
+  return String(name || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Look up an approximate [lat, lon] for a country name, tolerant of common
+ * alternate spellings and diacritics. Returns null for no match — a
+ * deliberate "don't guess" outcome, not an error.
+ * @param {string} rawName
+ * @returns {[number, number]|null}
+ */
+export function findCountryCentroid(rawName) {
+  const key = normalizeCountryName(rawName);
+  if (!key) return null;
+  const canonical = COUNTRY_ALIASES[key] || key;
+  return COUNTRY_CENTROIDS[canonical] || null;
+}
