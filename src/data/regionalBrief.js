@@ -64,6 +64,43 @@ export function normalizeRegionalArticles(payload, limit = MAX_ARTICLES) {
   return articles;
 }
 
+const MAX_RELIEFWEB_REPORTS = 3;
+
+/**
+ * Normalize a ReliefWeb `/v1/reports` response into a small, capped list.
+ *
+ * Country-level humanitarian-response context, not point geometry — this is
+ * why it rides along in the regional brief rather than becoming its own
+ * globe layer (see `docs/GEOPOLITICAL-EVENT-GEOLOCATION.md`). Absence is an
+ * empty array, never undefined, matching the same "optional field never
+ * blanks the rest of the payload" discipline as the space-weather panel's
+ * DONKI/NeoWs fields.
+ *
+ * @param {object} payload Raw ReliefWeb API response.
+ * @returns {Array<{title: string, url: string, date: string|null}>}
+ */
+export function normalizeReliefWebReports(payload) {
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const seen = new Set();
+  const reports = [];
+  for (const row of rows) {
+    const fields = row?.fields || {};
+    const url = safeHttpUrl(fields.url || fields.url_alias);
+    const title = cleanText(fields.title, 180);
+    if (!url || !title) continue;
+    if (seen.has(title)) continue;
+    seen.add(title);
+    const rawDate = cleanText(fields.date?.created, 32);
+    reports.push({
+      title,
+      url,
+      date: Number.isNaN(Date.parse(rawDate)) ? null : new Date(rawDate).toISOString(),
+    });
+    if (reports.length >= MAX_RELIEFWEB_REPORTS) break;
+  }
+  return reports;
+}
+
 /** Normalize Open-Meteo current conditions into a small source-stamped record. */
 export function normalizeRegionalWeather(payload) {
   const current = payload?.current;

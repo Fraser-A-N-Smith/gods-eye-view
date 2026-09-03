@@ -4,6 +4,7 @@ import {
   normalizeRegionalArticles,
   normalizeRegionalPlace,
   normalizeRegionalWeather,
+  normalizeReliefWebReports,
   regionalDistanceM,
   weatherCodeLabel,
 } from './regionalBrief.js';
@@ -51,6 +52,27 @@ test('zone-naive Open-Meteo timestamps are pinned to UTC, zoned ones pass throug
   assert.equal(zoned.observedAt, '2026-08-16T22:15:00.000Z');
   const invalid = normalizeRegionalWeather({ current: { time: 'not-a-time', temperature_2m: 20 } });
   assert.equal(invalid.observedAt, null);
+});
+
+test('normalizes, dedupes, caps, and rejects unsafe ReliefWeb rows', () => {
+  const reports = normalizeReliefWebReports({ data: [
+    { fields: { title: 'Flood response update', url: 'https://reliefweb.int/report/one', date: { created: '2026-08-20T00:00:00Z' } } },
+    { fields: { title: 'Flood response update', url: 'https://reliefweb.int/report/dup' } },
+    { fields: { title: 'Unsafe', url: 'javascript:alert(1)' } },
+    { fields: { title: 'Appeal launched', url: 'https://reliefweb.int/report/two' } },
+    { fields: { title: 'Situation report', url: 'https://reliefweb.int/report/three' } },
+    { fields: { title: 'Fourth report, should be capped', url: 'https://reliefweb.int/report/four' } },
+  ] });
+  assert.equal(reports.length, 3, 'capped at MAX_RELIEFWEB_REPORTS');
+  assert.equal(reports[0].title, 'Flood response update');
+  assert.equal(reports[0].date, '2026-08-20T00:00:00.000Z');
+  assert.equal(reports[1].title, 'Appeal launched', 'the duplicate title was dropped, not the unsafe row counted');
+});
+
+test('an empty or malformed ReliefWeb payload yields an empty array, never undefined', () => {
+  for (const input of [null, {}, { data: null }, { data: [] }]) {
+    assert.deepEqual(normalizeReliefWebReports(input), []);
+  }
 });
 
 test('regional distance handles nearby movement and missing positions', () => {

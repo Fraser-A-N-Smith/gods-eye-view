@@ -115,6 +115,20 @@ export const DATA_CREDITS = [
       '(location-matched article links; publisher terms apply)',
   },
   {
+    key: 'reliefweb',
+    html:
+      'Cockpit humanitarian-response context: ' +
+      '<a href="https://reliefweb.int" target="_blank" rel="noopener">ReliefWeb (UN OCHA)</a> ' +
+      '(country-matched report links; publisher terms apply)',
+  },
+  {
+    key: 'gdelt-cameo-events',
+    html:
+      'Geopolitical Events (CAMEO-typed, rolling buffer): ' +
+      '<a href="https://www.gdeltproject.org/about.html" target="_blank" rel="noopener">GDELT Project — Event Database 2.0</a> ' +
+      '(reported events, not confirmed incidents)',
+  },
+  {
     key: 'gdacs',
     html:
       'Global hazard alerts (floods, droughts): ' +
@@ -314,6 +328,14 @@ export const DATA_CREDITS = [
       'Vessel events (AIS gaps, encounters, loitering, port visits): ' +
       '<a href="https://globalfishingwatch.org" target="_blank" rel="noopener">Global Fishing Watch</a> ' +
       '(CC BY-NC 4.0 — <strong>non-commercial use only</strong>)',
+  },
+  {
+    key: 'acled',
+    html:
+      'ACLED Events (battles, violence against civilians, riots, protests, explosions/remote violence, ' +
+      'strategic developments): ' +
+      '<a href="https://acleddata.com" target="_blank" rel="noopener">ACLED</a> ' +
+      '(<strong>non-commercial use only</strong> — see DATA_SOURCES.md)',
   },
   {
     key: 'nifc',
