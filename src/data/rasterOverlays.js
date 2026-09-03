@@ -2,11 +2,14 @@
  * @module data/rasterOverlays
  * @description Independently toggleable open-data raster overlays.
  *
- * Three transparent tile layers composited onto the Cesium globe as
+ * Transparent tile layers composited onto the Cesium globe as
  * `Cesium.ImageryLayer`s: OpenSeaMap sea marks (buoys, beacons, lighthouses,
- * harbours), OpenSnowMap ski pistes, and OpenRailwayMap rail tracks (tracks,
- * stations, electrification). All three are keyless, ODbL-derived, and
- * render above whichever base imagery stack is active.
+ * harbours), OpenSnowMap ski pistes, OpenRailwayMap rail tracks (tracks,
+ * stations, electrification), and a CARTO admin-boundaries-and-place-names
+ * reference layer (country/state outlines + city/place labels, the "turn on
+ * labels over the satellite view" layer Google Maps' hybrid mode ships by
+ * default). All are keyless, OSM-derived, and render above whichever base
+ * imagery stack is active.
  *
  * ## They only appear on a globe-imagery stack, and the layer says so
  *
@@ -27,10 +30,15 @@
  *
  * ## Politeness
  *
- * All three are volunteer-run community tile servers with no CDN behind them
- * and no commercial backing. Each descriptor caps its zoom at the depth the
- * source actually renders, so panning past it cannot turn into a 404 storm
- * against a hobby server.
+ * The seamark/piste/rail three are volunteer-run community tile servers with
+ * no CDN behind them and no commercial backing. Each of those descriptors
+ * caps its zoom at the depth the source actually renders, so panning past it
+ * cannot turn into a 404 storm against a hobby server. The CARTO reference
+ * layer is different: it's served off CARTO's own CDN (`basemaps.cartocdn.com`,
+ * the same free basemap-tile service Leaflet/CARTO's own JS SDK point at),
+ * and its whole point is to be legible zoomed all the way out to the
+ * country/continent level — so it is the one entry here without a raised
+ * `minimumLevel`.
  *
  * ## Not suppressed during timeline replay
  *
@@ -101,6 +109,33 @@ export const RASTER_OVERLAYS = Object.freeze([
     credit: '© OpenRailwayMap contributors (ODbL) · © OpenStreetMap contributors',
     coverage: 'TRACKS · STATIONS · ELECTRIFICATION',
     homepage: 'https://www.openrailwaymap.org',
+  }),
+  Object.freeze({
+    id: 'reference-boundaries-labels',
+    name: 'Borders & Labels',
+    icon: '🏷️',
+    source: 'CARTO',
+    token: 'B',
+    // CARTO's "dark matter, labels only" style: transparent PNG carrying just
+    // country/state-level administrative boundary lines and place-name text
+    // (countries, states/provinces, cities and towns), styled with a dark
+    // halo so it reads over both satellite/aerial imagery and light basemaps —
+    // the same "labels reference layer over imagery" idea as Google Maps'
+    // hybrid mode. No API key; CARTO's basemap CDN, not a volunteer server
+    // (Cesium's own UrlTemplateImageryProvider docs use this same
+    // basemaps.cartocdn.com host as their worked example). This sandboxed
+    // environment's network egress policy could not reach basemaps.cartocdn.com
+    // to confirm the exact tile live — same caveat as openrailwaymap-tracks
+    // above — so re-verify against the live tile server before relying on it.
+    url: 'https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png',
+    maximumLevel: 18,
+    // Deliberately NOT raised like the other three overlays here — country
+    // outlines and place names are exactly what you want zoomed all the way
+    // out, and CARTO's CDN (unlike the hobby servers above) is built for it.
+    minimumLevel: 0,
+    credit: '© OpenStreetMap contributors (ODbL) · Basemap styles © CARTO',
+    coverage: 'COUNTRIES · STATES/PROVINCES · PLACE NAMES',
+    homepage: 'https://carto.com/basemaps',
   }),
 ]);
 

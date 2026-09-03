@@ -300,6 +300,14 @@ export const DATA_CREDITS = [
       '&amp; © OpenStreetMap contributors (ODbL 1.0)',
   },
   {
+    key: 'carto-reference',
+    html:
+      'Borders &amp; place-name labels overlay: ' +
+      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> ' +
+      '(ODbL 1.0), basemap styles © ' +
+      '<a href="https://carto.com/basemaps" target="_blank" rel="noopener">CARTO</a>',
+  },
+  {
     key: 'noaa-nws',
     html:
       'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +
