@@ -3,6 +3,30 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (c)
+
+### Added
+
+- The **Earthquakes** layer now supplements USGS with EMSC (European-
+  Mediterranean Seismological Centre) reports — faster and denser than USGS
+  specifically for Europe/Mediterranean. An EMSC report matching a USGS
+  event in space, time, and magnitude is dropped rather than double-
+  rendered; a genuinely distinct EMSC event renders alongside USGS ones,
+  tagged `source: 'EMSC'` for the analyst query engine. Keyless; an EMSC
+  fetch failure never affects USGS-backed availability.
+
+## [Unreleased] — 2026-08-31 (b)
+
+### Added
+
+- Added a **Radiosondes** layer (SondeHub Tracker): live weather-balloon
+  positions worldwide, sitting between the Flights and Satellites layers as
+  a genuinely different altitude band. Keyless; the `/api/sondehub` proxy
+  enforces a 60-second server-side cache so every client sharing this app
+  instance collapses onto one upstream request per minute, respecting
+  SondeHub's request not to poll its volunteer-funded infrastructure any
+  tighter than necessary.
+
 ## [Unreleased] — 2026-08-31
 
 ### Added

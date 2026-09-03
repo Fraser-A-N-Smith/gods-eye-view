@@ -192,7 +192,8 @@ Twenty-three live layers. **Nineteen of them need nothing at all** — no key, n
 | 🎖️ **Military Flights** | ADS-B military traffic in amber | adsb.lol | 🟢 |
 | 🚢 **Live Vessels** | Thousands of ships worldwide | AISStream | 🟡 |
 | 🛰️ **Satellites** | A roughly 840-object core catalog, color-coded by class with a live legend — the **DENSE** chip drops in the whole Starlink shell | CelesTrak | 🟢 |
-| 🌍 **Earthquakes** | Global seismic activity, last 24h | USGS | 🟢 |
+| 🎈 **Radiosondes** | Live weather-balloon positions — the altitude band between the Flights and Satellites layers | SondeHub Tracker | 🟢 |
+| 🌍 **Earthquakes** | Global seismic activity, last 24h — supplemented by EMSC for faster Europe/Mediterranean coverage, deduplicated against USGS | USGS + EMSC | 🟢 |
 | 🚗 **Traffic** | Live congestion driving per-vehicle flow at street level — dive below ~8 km and the dots color to real jams. Keyless it's an approximate simulation | TomTom + OSM | 🟢 (🟡 TomTom makes it real — get one) |
 | 📹 **CCTV Mesh** | ~800 public cameras projected *into* the 3D space — Austin · California (Caltrans) · London (TfL). Positions are published; poses are estimated priors **you calibrate by dragging a gizmo on the camera itself** | City APIs | 🟢 |
 | 📻 **Radio** | Geolocated world radio with an **analog tuner** — drag the needle across up to 750 stations and the globe flies to each broadcaster | Radio Browser / broadcasters | 🟢 |

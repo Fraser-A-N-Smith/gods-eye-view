@@ -67,6 +67,12 @@ export const DATA_CREDITS = [
     html: 'Earthquakes: Data courtesy of the U.S. Geological Survey',
   },
   {
+    key: 'emsc',
+    html:
+      'Supplemental regional earthquake reports: ' +
+      '<a href="https://www.emsc-csem.org" target="_blank" rel="noopener">European-Mediterranean Seismological Centre (EMSC)</a>',
+  },
+  {
     key: 'overpass',
     html:
       'Road geometry (traffic): ' +
@@ -133,6 +139,13 @@ export const DATA_CREDITS = [
       'Ocean buoy observations: NOAA National Data Buoy Center — ' +
       '<a href="https://www.ndbc.noaa.gov" target="_blank" rel="noopener">ndbc.noaa.gov</a> ' +
       '(US public domain)',
+  },
+  {
+    key: 'sondehub',
+    html:
+      'Radiosonde (weather balloon) positions: ' +
+      '<a href="https://sondehub.org" target="_blank" rel="noopener">SondeHub Tracker</a> ' +
+      '(CC BY-SA 2.0)',
   },
   {
     key: 'pskreporter',

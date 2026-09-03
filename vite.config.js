@@ -46,6 +46,7 @@ import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
 import { parseNdbcText } from './src/data/oceanBuoysShape.js';
+import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
 import { mapFireballRows } from './src/data/fireballsShape.js';
@@ -2620,6 +2621,126 @@ function oceanBuoysProxy() {
 
   return {
     name: 'ocean-buoys-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * SondeHub proxy — live weather-balloon (radiosonde) telemetry from the
+ * SondeHub Tracker community project.
+ *
+ * The upstream (`api.v2.sondehub.org`) is keyless and public, but SondeHub is
+ * a volunteer-funded project that explicitly asks consumers not to poll
+ * tighter than necessary — this proxy enforces a 60s server-side TTL so every
+ * client sharing this app instance collapses onto one upstream request per
+ * minute regardless of how many browsers have the layer open.
+ *
+ * The pure mapping (`mapSondeTelemetryFeed`) lives in the Cesium-free
+ * `src/data/sondehubShape.js` (mirroring the existing
+ * `oceanBuoysShape.js`/`volcanoesShape.js` precedent) and is imported
+ * directly above — this proxy and the browser layer run the SAME
+ * implementation.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function sondehubProxy() {
+  const TTL_MS = 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_SONDES = 500;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'sondehub-v1.json');
+  const SONDEHUB_URL = 'https://api.v2.sondehub.org/sondes/telemetry';
+  const ATTRIBUTION = 'SondeHub Tracker (CC BY-SA 2.0)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[sondehub-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=30' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(SONDEHUB_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const sondes = mapSondeTelemetryFeed(parsed, MAX_SONDES);
+
+    const body = JSON.stringify({
+      sondes,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/sondehub', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'sondehub', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[sondehub-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Sondehub unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'sondehub-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9576,6 +9697,7 @@ export default defineConfig(({ mode }) => {
       globalHazardsProxy(),
       volcanoesProxy(),
       oceanBuoysProxy(),
+      sondehubProxy(),
       hamRadioProxy(),
       borderWaitTimesProxy(),
       fireballsProxy(),
