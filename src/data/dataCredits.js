@@ -134,6 +134,13 @@ export const DATA_CREDITS = [
       '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
   },
   {
+    key: 'usgs-vns',
+    html:
+      'Live US volcano alert status: ' +
+      '<a href="https://volcanoes.usgs.gov/vns2/" target="_blank" rel="noopener">USGS Volcano Notification Service</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'ndbc',
     html:
       'Ocean buoy observations: NOAA National Data Buoy Center — ' +

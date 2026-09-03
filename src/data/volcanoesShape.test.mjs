@@ -4,7 +4,7 @@
 // server/client drift impossible rather than merely discouraged.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MIN_ERUPTION_YEAR, mapVolcanoFeature } from './volcanoesShape.js';
+import { MIN_ERUPTION_YEAR, mapVolcanoFeature, mapVolcanoNotice, mergeVolcanoAlerts } from './volcanoesShape.js';
 
 const BASE = {
   geometry: { coordinates: [-155.28, 19.42] },
@@ -100,4 +100,49 @@ test('mapVolcanoFeature: null/empty input is rejected', () => {
 test('mapVolcanoFeature: output is JSON-safe', () => {
   const r = mapVolcanoFeature(BASE);
   assert.deepEqual(JSON.parse(JSON.stringify(r)), r);
+});
+
+// ── USGS Volcano Notification enrichment ────────────────────────────────────
+
+test('mapVolcanoNotice: maps a well-formed notice with alert level and color code', () => {
+  assert.deepEqual(
+    mapVolcanoNotice({ volcano_name: 'Kilauea', alert_level: 'watch', color_code: 'orange', updated: '2026-08-30T00:00:00Z' }),
+    { volcanoName: 'Kilauea', alertLevel: 'WATCH', colorCode: 'ORANGE', updatedAt: '2026-08-30T00:00:00.000Z' },
+  );
+});
+
+test('mapVolcanoNotice: accepts alternate field name spellings', () => {
+  const r = mapVolcanoNotice({ volcanoName: 'Mount St. Helens', alertLevel: 'ADVISORY' });
+  assert.equal(r.volcanoName, 'Mount St. Helens');
+  assert.equal(r.alertLevel, 'ADVISORY');
+});
+
+test('mapVolcanoNotice: rejects a value outside the real USGS vocabulary rather than guessing', () => {
+  assert.equal(mapVolcanoNotice({ volcano_name: 'Test', alert_level: 'SEVERE' }), null);
+  assert.equal(mapVolcanoNotice({ volcano_name: 'Test', color_code: 'PURPLE' }), null);
+});
+
+test('mapVolcanoNotice: rejects a missing name or a notice with neither alert level nor color code', () => {
+  assert.equal(mapVolcanoNotice({ alert_level: 'WATCH' }), null);
+  assert.equal(mapVolcanoNotice({ volcano_name: 'Test' }), null);
+  assert.equal(mapVolcanoNotice(null), null);
+});
+
+test('mergeVolcanoAlerts: attaches a matching notice by name, diacritic- and case-insensitively', () => {
+  const volcanoes = [{ id: 'gvp:1', name: 'Kīlauea' }, { id: 'gvp:2', name: 'Mount St. Helens' }];
+  const notices = [{ volcanoName: 'kilauea', alertLevel: 'WATCH', colorCode: 'ORANGE', updatedAt: '2026-08-30T00:00:00.000Z' }];
+  const merged = mergeVolcanoAlerts(volcanoes, notices);
+  assert.equal(merged[0].alertLevel, 'WATCH');
+  assert.equal(merged[0].colorCode, 'ORANGE');
+  assert.equal(merged[0].alertUpdatedAt, '2026-08-30T00:00:00.000Z');
+  assert.equal(merged[1].alertLevel, null, 'a volcano with no matching notice is untouched, not an error');
+  assert.equal(merged[1].colorCode, null);
+});
+
+test('mergeVolcanoAlerts: never drops or reorders volcanoes, and tolerates missing/malformed input', () => {
+  const volcanoes = [{ id: 'gvp:1', name: 'A' }, { id: 'gvp:2', name: 'B' }];
+  assert.equal(mergeVolcanoAlerts(volcanoes, []).length, 2);
+  assert.equal(mergeVolcanoAlerts(volcanoes, null).length, 2);
+  assert.deepEqual(mergeVolcanoAlerts(volcanoes, undefined).map((v) => v.id), ['gvp:1', 'gvp:2']);
+  assert.deepEqual(mergeVolcanoAlerts(null, []), []);
 });

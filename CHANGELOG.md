@@ -3,6 +3,19 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (e)
+
+### Added
+
+- The **Active Volcanoes** layer now merges in live USGS Volcano
+  Notification Service alert status for US-monitored volcanoes, matched
+  onto Smithsonian GVP entries by name. A WATCH/WARNING alert overrides
+  the eruption-recency color with a larger marker; any active alert level
+  appends a bracketed suffix to the label (e.g. `Kilauea [WATCH]`).
+  Keyless; a volcano with no matching notice — the common case globally —
+  renders exactly as before. ⚠️ The upstream message API's field names are
+  a best-effort tolerant mapping pending live-schema verification.
+
 ## [Unreleased] — 2026-08-31 (d)
 
 ### Added

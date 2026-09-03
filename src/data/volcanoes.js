@@ -30,7 +30,12 @@ import { mapVolcanoFeature } from './volcanoesShape.js';
  * Each volcano renders as a small colored point with a name label, colored
  * by recency band: eruptions since 2000 are red, since 1950 orange,
  * otherwise yellow (three-band scheme mirroring `earthquakes.js`'s
- * `depthColor` pattern).
+ * `depthColor` pattern) — unless a live USGS Volcano Notification alert at
+ * WATCH/WARNING overrides it with a larger, unmistakable marker (see
+ * `alertStyle`). The proxy merges those live US alerts onto matching GVP
+ * records (by name, via `volcanoesShape.js`'s `mergeVolcanoAlerts`) before
+ * this layer ever sees the payload — most volcanoes worldwide simply have no
+ * matching alert, which renders exactly as before this enrichment shipped.
  */
 
 const API_URL = '/api/volcanoes';
@@ -52,17 +57,36 @@ function recencyStyle(lastEruptionYear) {
 }
 
 /**
+ * A live USGS alert at WATCH/WARNING (or an ORANGE/RED aviation color code)
+ * overrides the eruption-recency style below with a larger, unmistakable
+ * marker — an active status change is a stronger signal than eruption
+ * history. ADVISORY/NORMAL/GREEN/YELLOW, or no live alert at all, fall
+ * through to the existing recency-based coloring unchanged.
+ */
+function alertStyle(volcano) {
+  if (volcano.alertLevel === 'WARNING' || volcano.colorCode === 'RED') {
+    return { color: Cesium.Color.RED, pixelSize: 16 };
+  }
+  if (volcano.alertLevel === 'WATCH' || volcano.colorCode === 'ORANGE') {
+    return { color: Cesium.Color.ORANGE, pixelSize: 14 };
+  }
+  return recencyStyle(Number(volcano.lastEruptionYear));
+}
+
+/**
  * Map one volcano's raw plain values (as pulled off an entity's `properties`,
  * or straight from the proxy payload) to a JSON-safe analyst record (analyst
  * query engine seam). Pure — no Cesium types. Missing/unknown fields are
  * null, never NaN/undefined. Falls back to an index-based id when the
  * upstream id is absent.
  * @param {Object|null|undefined} raw - Plain values:
- *   {id, name, lat, lon, lastEruptionYear, country, volcanoType, elevationM}.
+ *   {id, name, lat, lon, lastEruptionYear, country, volcanoType, elevationM,
+ *   alertLevel, colorCode, alertUpdatedAt}.
  * @param {number} [index=0] - Position in the snapshot (fallback id only).
  * @returns {{id: string, name: string|null, lat: number|null, lon: number|null,
  *   lastEruptionYear: number|null, country: string|null, volcanoType: string|null,
- *   elevationM: number|null}}
+ *   elevationM: number|null, alertLevel: string|null, colorCode: string|null,
+ *   alertUpdatedAt: string|null}}
  */
 export function mapAnalystRecord(raw, index = 0) {
   const num = (v) => (Number.isFinite(v) ? v : null);
@@ -76,6 +100,9 @@ export function mapAnalystRecord(raw, index = 0) {
     country: text(raw?.country),
     volcanoType: text(raw?.volcanoType),
     elevationM: num(raw?.elevationM),
+    alertLevel: text(raw?.alertLevel),
+    colorCode: text(raw?.colorCode),
+    alertUpdatedAt: text(raw?.alertUpdatedAt),
   };
 }
 
@@ -134,9 +161,10 @@ export function createVolcanoesLayer() {
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
           count++;
-          const style = recencyStyle(Number(volcano.lastEruptionYear));
+          const style = alertStyle(volcano);
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = volcano.id || `volcano-${count}`;
+          const hasActiveAlert = volcano.alertLevel && volcano.alertLevel !== 'NORMAL';
 
           _dataSource.entities.add({
             id: `volcano:${stableId}`,
@@ -150,7 +178,7 @@ export function createVolcanoesLayer() {
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             label: {
-              text: String(volcano.name ?? ''),
+              text: hasActiveAlert ? `${volcano.name ?? ''} [${volcano.alertLevel}]` : String(volcano.name ?? ''),
               font: '12px sans-serif',
               fillColor: Cesium.Color.WHITE,
               outlineColor: Cesium.Color.BLACK,
@@ -169,6 +197,11 @@ export function createVolcanoesLayer() {
               country: volcano.country ?? null,
               volcanoType: volcano.volcanoType ?? null,
               elevationM: volcano.elevationM ?? null,
+              // Live USGS Volcano Notification enrichment (additive, best-effort —
+              // see volcanoesShape.js). Null for the common case of no matching notice.
+              alertLevel: volcano.alertLevel ?? null,
+              colorCode: volcano.colorCode ?? null,
+              alertUpdatedAt: volcano.alertUpdatedAt ?? null,
             },
           });
         }
@@ -223,6 +256,9 @@ export function createVolcanoesLayer() {
           country: p?.country?.getValue(now),
           volcanoType: p?.volcanoType?.getValue(now),
           elevationM: p?.elevationM?.getValue(now),
+          alertLevel: p?.alertLevel?.getValue(now),
+          colorCode: p?.colorCode?.getValue(now),
+          alertUpdatedAt: p?.alertUpdatedAt?.getValue(now),
           lat: carto ? Cesium.Math.toDegrees(carto.latitude) : null,
           lon: carto ? Cesium.Math.toDegrees(carto.longitude) : null,
         }, result.length));

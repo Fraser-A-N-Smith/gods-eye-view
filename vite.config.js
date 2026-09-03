@@ -44,7 +44,7 @@ import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js'
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
-import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
+import { mapVolcanoFeature, mapVolcanoNotice, mergeVolcanoAlerts } from './src/data/volcanoesShape.js';
 import { parseNdbcText, mapCoOpsStation } from './src/data/oceanBuoysShape.js';
 import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
@@ -2403,7 +2403,8 @@ function volcanoesProxy() {
   const VOLCANOES_URL = 'https://webservices.volcano.si.edu/geoserver/GVP-VOTW/ows'
     + '?service=WFS&version=2.0.0&request=GetFeature'
     + '&typeName=GVP-VOTW:Smithsonian_VOTW_Holocene_Volcanoes&outputFormat=json';
-  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution';
+  const VOLCANO_NOTICES_URL = 'https://volcanoes.usgs.gov/vsc/api/volcanoMessageApi/';
+  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution + USGS Volcano Notification Service';
 
   let cache = null;
   let diskLoaded = false;
@@ -2416,6 +2417,39 @@ function volcanoesProxy() {
       const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
       if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
     } catch { /* first run */ }
+  }
+
+  /**
+   * Best-effort fetch of live USGS Volcano Notification/Message API entries
+   * — every failure mode (network error, non-2xx, unexpected response
+   * shape) degrades to an empty list rather than throwing, so this never
+   * affects GVP-backed availability. Same independent-degradation shape as
+   * DONKI/NeoWs on the space-weather panel.
+   *
+   * The response shape is tolerant of a bare array OR a
+   * `{result:[...]}`/`{messages:[...]}` wrapper, since the exact upstream
+   * shape was not verifiable against a live response while writing this
+   * (see `mapVolcanoNotice`'s doc comment in volcanoesShape.js).
+   * @returns {Promise<Array<object>>} See `mapVolcanoNotice` for the record shape.
+   */
+  async function fetchVolcanoNotices() {
+    try {
+      const response = await fetch(VOLCANO_NOTICES_URL, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) return [];
+      const payload = await response.json();
+      const raw = Array.isArray(payload) ? payload
+        : Array.isArray(payload?.result) ? payload.result
+          : Array.isArray(payload?.messages) ? payload.messages
+            : [];
+      const notices = [];
+      for (const entry of raw) {
+        const mapped = mapVolcanoNotice(entry);
+        if (mapped) notices.push(mapped);
+      }
+      return notices;
+    } catch {
+      return [];
+    }
   }
 
   async function saveDiskCache(entry) {
@@ -2452,8 +2486,13 @@ function volcanoesProxy() {
       if (mapped) volcanoes.push(mapped);
     }
 
+    // USGS Volcano Notification is an optional live-status enrichment — its
+    // failure never affects GVP-backed availability (see fetchVolcanoNotices).
+    const notices = await fetchVolcanoNotices();
+    const enriched = mergeVolcanoAlerts(volcanoes, notices);
+
     const body = JSON.stringify({
-      volcanoes: volcanoes.slice(0, MAX_VOLCANOES),
+      volcanoes: enriched.slice(0, MAX_VOLCANOES),
       retrievedAt: Date.now(),
       attribution: ATTRIBUTION,
     });
