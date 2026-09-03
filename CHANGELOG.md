@@ -3,6 +3,27 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31
+
+### Added
+
+- Added real per-class 3D models for the `airliner` (A320) and `quadjet`
+  (A380) aircraft classes, replacing the shared generic 747 mesh those
+  classes previously rendered — `airliner` is the app's single most common
+  class, so this was the largest remaining visual-fidelity gap in the fleet.
+  Sourced CC BY 4.0 from `amvlab/aircraft-models` and re-baked to this
+  project's model convention (provenance and exact modifications in
+  `public/models/README.md`; belly/radius/trail-anchor pins verified by the
+  existing `modelScale.test.mjs`).
+- Smoothed tracked-aircraft and vessel trail lines with a gap-safe centripetal
+  Catmull-Rom curve (`src/data/trailSmoothing.js`) — a real turn no longer
+  kinks along the trail the way it did when only straight chords joined raw
+  fixes, matching how smoothly the live icon already moves through the same
+  turn. Every real fix still renders exactly where it was observed; only a
+  segment short enough that a curve is a reasonable inference (below
+  `MAX_SMOOTH_SEGMENT_M`) is curved, so a sparse or gapped stretch still
+  renders as the straight chord it actually is.
+
 ## [Unreleased] — 2026-08-30 (f)
 
 ### Added
