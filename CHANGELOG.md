@@ -24,6 +24,44 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   `MAX_SMOOTH_SEGMENT_M`) is curved, so a sparse or gapped stretch still
   renders as the straight chord it actually is.
 
+## [Unreleased] — 2026-08-30 (g)
+
+### Added
+
+- Satellites now also loads CelesTrak's `beidou` group, so the NAV class
+  covers all four operational GNSS constellations (GPS, GLONASS, Galileo,
+  BeiDou) instead of missing China's fully-global system.
+- The tracked ISS card now shows a `CREW · N ABOARD` line, sourced from a new
+  `/api/iss-crew` proxy (Open Notify `astros.json`, server-fetched only since
+  the upstream is HTTP-only, cached an hour, stale/empty-safe on failure).
+
+### Fixed
+
+- Space Missions' reconstructed (no-supplied-trajectory) orbit rings are no
+  longer always a circle: `approximateOrbitPath` now draws named orbits at
+  their real published perigee/apogee, so a Geostationary Transfer Orbit
+  renders as the visibly elongated ellipse it actually is (~250 km perigee,
+  ~35,786 km apogee) instead of a circle pinned at GEO altitude, and Molniya
+  orbits render with their real, even more eccentric shape. A final
+  Geostationary orbit stays a circular ring but is now correctly equatorial
+  regardless of the launch site's own latitude (real GEO satellites reach
+  that plane via a later apogee-kick burn).
+- The projected launch azimuth for a reconstructed ascent/orbit no longer
+  comes from a fixed three-way compass-heading guess (south-southwest for a
+  "western North America" bounding box or any "polar"-named orbit, due east
+  otherwise, regardless of the actual launch latitude or target orbit). It is
+  now derived from the standard orbital-mechanics relation
+  sin(azimuth)=cos(inclination)/cos(latitude) using each named orbit's real
+  published target inclination, resolving the relation's two mirror solutions
+  the way real launch ranges do (prograde missions NE, retrograde/Sun-sync
+  missions SW), and clamping to the site's own latitude when the target
+  inclination is not directly reachable. A Cape Canaveral ISS-inclination
+  mission now projects northeast (matching real published Falcon 9/Soyuz
+  crew-launch azimuths) and a Vandenberg Sun-synchronous mission projects
+  south (matching real Vandenberg SSO launches) for the correct physical
+  reason, instead of both falling into the same hardcoded bucket by name or
+  geography.
+
 ## [Unreleased] — 2026-08-30 (f)
 
 ### Added

@@ -49,10 +49,10 @@ function harness({ globeShow = true } = {}) {
 
 const seamarks = RASTER_OVERLAYS[0];
 
-test('both overlays ship, with distinct ids and tokens', () => {
-  assert.equal(RASTER_OVERLAYS.length, 2);
-  assert.deepEqual(RASTER_OVERLAY_IDS, ['openseamap-seamarks', 'opensnowmap-pistes']);
-  assert.equal(new Set(RASTER_OVERLAYS.map((o) => o.token)).size, 2);
+test('all three overlays ship, with distinct ids and tokens', () => {
+  assert.equal(RASTER_OVERLAYS.length, 3);
+  assert.deepEqual(RASTER_OVERLAY_IDS, ['openseamap-seamarks', 'opensnowmap-pistes', 'openrailwaymap-tracks']);
+  assert.equal(new Set(RASTER_OVERLAYS.map((o) => o.token)).size, 3);
 });
 
 test('every overlay carries ODbL attribution and a zoom range', () => {
@@ -224,7 +224,7 @@ test('the layers deliberately do NOT implement replay suppression', async () => 
 
 test('the shipped layers expose the standard lifecycle', async () => {
   const layers = (await import('./rasterOverlays.js')).default;
-  assert.equal(layers.length, 2);
+  assert.equal(layers.length, 3);
   for (const layer of layers) {
     for (const method of ['init', 'enable', 'disable', 'update', 'destroy', 'getStats']) {
       assert.equal(typeof layer[method], 'function', `${layer.id}.${method}`);

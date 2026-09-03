@@ -56,6 +56,12 @@ export const DATA_CREDITS = [
       'Dr. T.S. Kelso',
   },
   {
+    key: 'open-notify',
+    html:
+      'ISS crew roster: ' +
+      '<a href="http://open-notify.org" target="_blank" rel="noopener">Open Notify</a>',
+  },
+  {
     key: 'launch-library-2',
     html:
       'Space mission launch, payload &amp; recovery metadata: ' +
@@ -147,6 +153,25 @@ export const DATA_CREDITS = [
       '(US public domain; major crossings only)',
   },
   {
+    key: 'ioda',
+    html:
+      'Internet outage alerts: ' +
+      '<a href="https://ioda.caida.org" target="_blank" rel="noopener">IODA — Internet Outage Detection and Analysis</a>, CAIDA/UC San Diego',
+  },
+  {
+    key: 'ooni',
+    html:
+      'Censorship measurement aggregates: ' +
+      '<a href="https://ooni.org" target="_blank" rel="noopener">OONI — Open Observatory of Network Interference</a>',
+  },
+  {
+    key: 'country-centroids',
+    html:
+      'Country centroid lookup: ' +
+      '<a href="https://github.com/gavinr/world-countries-centroids" target="_blank" rel="noopener">gavinr/world-countries-centroids</a> ' +
+      '(MIT)',
+  },
+  {
     key: 'cneos-fireball',
     html:
       'Fireball/bolide detections: ' +
@@ -164,6 +189,13 @@ export const DATA_CREDITS = [
     html:
       'Near-Earth object close approaches: ' +
       '<a href="https://api.nasa.gov/" target="_blank" rel="noopener">NASA NeoWs — Near Earth Object Web Service</a>',
+  },
+  {
+    key: 'cneos-sentry',
+    html:
+      'Asteroid impact-risk table: ' +
+      '<a href="https://cneos.jpl.nasa.gov/sentry/" target="_blank" rel="noopener">NASA/JPL CNEOS Sentry System</a> ' +
+      '(US public domain)',
   },
   {
     key: 'austin-cctv',
@@ -247,6 +279,13 @@ export const DATA_CREDITS = [
       '&amp; © OpenStreetMap contributors (ODbL 1.0)',
   },
   {
+    key: 'openrailwaymap',
+    html:
+      'Rail network overlay (tracks, stations, electrification): ' +
+      '<a href="https://www.openrailwaymap.org" target="_blank" rel="noopener">OpenRailwayMap</a> ' +
+      '&amp; © OpenStreetMap contributors (ODbL 1.0)',
+  },
+  {
     key: 'noaa-nws',
     html:
       'Weather alerts &amp; tropical cyclones: NOAA National Weather Service and ' +
@@ -257,7 +296,7 @@ export const DATA_CREDITS = [
   {
     key: 'noaa-swpc',
     html:
-      'Space weather (aurora forecast, planetary K-index): NOAA / NWS Space Weather ' +
+      'Space weather (aurora forecast, planetary K-index, real-time solar wind): NOAA / NWS Space Weather ' +
       'Prediction Center (' +
       '<a href="https://www.swpc.noaa.gov" target="_blank" rel="noopener">swpc.noaa.gov</a>' +
       ', US public domain)',

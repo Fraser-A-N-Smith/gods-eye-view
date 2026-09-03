@@ -928,14 +928,88 @@ export function replayState(
   };
 }
 
+/**
+ * Typical perigee/apogee altitude (meters) for named target orbits — real
+ * published figures, not app-specific tuning. This is what makes a
+ * Geostationary Transfer Orbit render as the visibly elongated ellipse it
+ * actually is (~250 km perigee, ~35,786 km apogee) instead of a circle
+ * pinned at GEO altitude — a transfer orbit is defined by NOT yet being
+ * circular, so drawing it as one erased the entire reason it has that name.
+ * Molniya is the other classically eccentric case; every other named orbit
+ * here flies effectively circular.
+ * @param {string} orbitName Lowercased Launch Library orbit name.
+ * @returns {{perigeeM: number, apogeeM: number}}
+ */
+function orbitApsidesM(orbitName) {
+  if (orbitName.includes('molniya')) return { perigeeM: 600000, apogeeM: 39900000 };
+  if (orbitName.includes('transfer')) return { perigeeM: 250000, apogeeM: 35786000 };
+  if (orbitName.includes('geostationary')) return { perigeeM: 35786000, apogeeM: 35786000 };
+  if (orbitName.includes('medium')) return { perigeeM: 20200000, apogeeM: 20200000 };
+  return { perigeeM: 550000, apogeeM: 550000 }; // LEO default: polar, sun-sync, unspecified
+}
+
+/**
+ * Standard target inclination (degrees) for named orbit types — published
+ * figures (ISS ~51.6°, Sun-synchronous ~97.8° retrograde, Molniya 63.4°,
+ * GPS-like MEO ~55°), used to derive a launch azimuth physically consistent
+ * with the pad's own latitude, in place of a fixed compass-heading guess.
+ * @param {string} orbitName Lowercased Launch Library orbit name.
+ * @returns {number} Target inclination, degrees (>90 = retrograde).
+ */
+function targetInclinationDeg(orbitName) {
+  if (orbitName.includes('sun') || orbitName.includes('sso')) return 97.8;
+  if (orbitName.includes('polar')) return 90;
+  if (orbitName.includes('molniya')) return 63.4;
+  if (orbitName.includes('medium')) return 55;
+  return 51.6; // unspecified LEO / transfer default: ISS-like mid inclination
+}
+
+/**
+ * Direct-ascent launch azimuth (compass bearing, degrees from North) that
+ * reaches a target inclination from a given launch latitude: the standard
+ * spherical-trigonometry relation sin(azimuth) = cos(inclination)/cos(latitude)
+ * (Bate/Mueller/White, "Fundamentals of Astrodynamics"). That relation has
+ * two mirror solutions; real ranges resolve the choice by flying prograde
+ * missions (inclination < 90°) toward the open-ocean NE quadrant and
+ * retrograde missions (inclination ≥ 90°, e.g. Sun-synchronous) toward the
+ * SW quadrant, away from populated land — which is why, for example, real
+ * Vandenberg Sun-synchronous launches fly azimuth ≈185-200° while Cape
+ * Canaveral ISS launches fly ≈45-52° NE. When the target inclination is
+ * lower than the launch site's own latitude it is not reachable without a
+ * plane-change dogleg (not modeled); this clamps to the minimum directly
+ * achievable inclination — the site's own latitude — rather than returning
+ * an azimuth for an orbit that pad cannot actually reach.
+ * @param {number} incDeg Target inclination, degrees (0-180).
+ * @param {number} latDeg Launch site latitude, degrees.
+ * @returns {number} Compass azimuth, degrees, 0-360.
+ */
+export function launchAzimuthForInclinationDeg(incDeg, latDeg) {
+  const cosLat = Math.cos(Cesium.Math.toRadians(latDeg));
+  if (Math.abs(cosLat) < 1e-6) return 90; // no real pad sits at the pole
+  const cosInc = Math.cos(Cesium.Math.toRadians(incDeg));
+  const sinAzimuth = Cesium.Math.clamp(cosInc / cosLat, -1, 1);
+  const azimuthFromNorth = Cesium.Math.toDegrees(Math.asin(sinAzimuth));
+  return Cesium.Math.mod(cosInc >= 0 ? azimuthFromNorth : 180 - azimuthFromNorth, 360);
+}
+
 export function approximateOrbitPath(launch) {
   if (!launch.orbit?.name || !Number.isFinite(launch.lat) || !Number.isFinite(launch.lon)) return null;
   const orbitName = launch.orbit.name.toLowerCase();
-  const altitude = orbitName.includes('geostationary') || orbitName.includes('transfer') ? 35786000
-    : orbitName.includes('medium') ? 20200000 : 550000;
-  const radius = Cesium.Ellipsoid.WGS84.maximumRadius + altitude;
+  const { perigeeM, apogeeM } = orbitApsidesM(orbitName);
+  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const perigeeRadius = earthRadius + perigeeM;
+  const apogeeRadius = earthRadius + apogeeM;
+  const semiMajorAxis = (perigeeRadius + apogeeRadius) / 2;
+  const eccentricity = (apogeeRadius - perigeeRadius) / (apogeeRadius + perigeeRadius);
+  const minorAxisScale = Math.sqrt(Math.max(0, 1 - eccentricity * eccentricity));
+
   const longitude = Cesium.Math.toRadians(launch.lon);
-  const latitude = Cesium.Math.toRadians(launch.lat);
+  // A final Geostationary orbit is reached by a later plane-change (apogee
+  // kick) burn that removes the launch site's inclination entirely — real
+  // GEO satellites end up in the equatorial plane regardless of where they
+  // launched from, so this ring uses latitude 0 rather than the pad's own.
+  const isFinalGeo = orbitName.includes('geostationary') && !orbitName.includes('transfer');
+  const latitude = isFinalGeo ? 0 : Cesium.Math.toRadians(launch.lat);
   const up = new Cesium.Cartesian3(
     Math.cos(latitude) * Math.cos(longitude),
     Math.cos(latitude) * Math.sin(longitude),
@@ -951,12 +1025,11 @@ export function approximateOrbitPath(launch) {
     -Math.sin(latitude) * Math.sin(longitude),
     Math.cos(latitude),
   );
-  const isPolar = orbitName.includes('polar') || orbitName.includes('sun');
-  const isWesternNorthAmerica = launch.lat > 20 && launch.lat < 60
-    && launch.lon > -140 && launch.lon < -105;
-  const launchAzimuthDeg = isPolar
-    ? (launch.lat >= 0 ? 180 : 0)
-    : isWesternNorthAmerica ? 190 : 90;
+  const launchAzimuthDeg = isFinalGeo
+    // Equatorial ring: every in-plane heading is equally valid once the pad's
+    // own latitude no longer applies.
+    ? 90
+    : launchAzimuthForInclinationDeg(targetInclinationDeg(orbitName), launch.lat);
   const launchAzimuth = Cesium.Math.toRadians(launchAzimuthDeg);
   const forward = Cesium.Cartesian3.normalize(
     Cesium.Cartesian3.add(
@@ -970,8 +1043,11 @@ export function approximateOrbitPath(launch) {
   // inserted directly above the pad. Offset the orbital plane downrange by a
   // small launch-to-insertion arc so a top-down view does not draw the entire
   // orbit on top of the launch site. The ascent still joins this ring at its
-  // propagated insertion reference.
-  const insertionArc = Cesium.Math.toRadians(isPolar ? 8 : 12);
+  // propagated insertion reference. Reusing this same anchor as the ellipse's
+  // perigee direction is physically apt for GTO: real transfer-orbit perigees
+  // sit near the parking-orbit altitude reached shortly after launch, close
+  // to the pad's own latitude band.
+  const insertionArc = Cesium.Math.toRadians(isFinalGeo ? 4 : 12);
   const orbitAnchor = Cesium.Cartesian3.normalize(
     Cesium.Cartesian3.add(
       Cesium.Cartesian3.multiplyByScalar(up, Math.cos(insertionArc), new Cesium.Cartesian3()),
@@ -988,12 +1064,18 @@ export function approximateOrbitPath(launch) {
     Cesium.Cartesian3.cross(planeNormal, orbitAnchor, new Cesium.Cartesian3()),
     new Cesium.Cartesian3(),
   );
+  // Perigee-focused ellipse, parametrized by eccentric anomaly: orbitAnchor
+  // points from Earth's center (the orbit's focus) toward perigee, and this
+  // reduces to the previous plain circle exactly when eccentricity is 0
+  // (every orbit here except a transfer orbit or Molniya).
   return Array.from({ length: 97 }, (_, index) => {
-    const angle = (index / 96) * Math.PI * 2;
+    const eccentricAnomaly = (index / 96) * Math.PI * 2;
+    const alongPerigee = semiMajorAxis * (Math.cos(eccentricAnomaly) - eccentricity);
+    const alongCrossTrack = semiMajorAxis * minorAxisScale * Math.sin(eccentricAnomaly);
     return new Cesium.Cartesian3(
-      radius * (Math.cos(angle) * orbitAnchor.x + Math.sin(angle) * crossTrack.x),
-      radius * (Math.cos(angle) * orbitAnchor.y + Math.sin(angle) * crossTrack.y),
-      radius * (Math.cos(angle) * orbitAnchor.z + Math.sin(angle) * crossTrack.z),
+      alongPerigee * orbitAnchor.x + alongCrossTrack * crossTrack.x,
+      alongPerigee * orbitAnchor.y + alongCrossTrack * crossTrack.y,
+      alongPerigee * orbitAnchor.z + alongCrossTrack * crossTrack.z,
     );
   });
 }

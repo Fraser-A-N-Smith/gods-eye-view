@@ -198,6 +198,12 @@ async function loadCriticalInfrastructure() {
     state.abort?.abort();
     state.abort = null;
     state.loading = false;
+    // Pins from whatever viewport was last loaded must not stay welded to
+    // the globe while the panel says "zoom in to load" — without this, a
+    // zoom-out left stale entities on screen with no indication they were
+    // no longer backed by the current viewport.
+    clearRendered();
+    state.records = [];
     setStatus('zoom-in', 'Zoom in to load critical infrastructure');
     return;
   }

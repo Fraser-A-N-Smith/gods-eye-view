@@ -20,7 +20,7 @@
 
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
-import { classifyKp, auroraStyle } from './spaceWeatherShape.js';
+import { classifyKp, auroraStyle, spaceWeatherEnrichmentLabel } from './spaceWeatherShape.js';
 
 const API_URL = '/api/space-weather';
 
@@ -71,6 +71,11 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
     solarEvents: [],
     closeApproaches: [],
     radioBlackoutScale: null,
+    // Standing asteroid impact-risk table (JPL Sentry) and continuous
+    // in-situ solar-wind measurement (NOAA SWPC plasma/mag at L1) — same
+    // panel-only, no-globe-geometry reasoning as the three fields above.
+    impactRiskObjects: [],
+    solarWindNow: null,
   };
 
   const doFetch = (...args) => (fetchImpl || globalThis.fetch)(...args);
@@ -179,6 +184,12 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
           && !Array.isArray(payload.radioBlackoutScale)
           ? payload.radioBlackoutScale
           : null;
+        state.impactRiskObjects = Array.isArray(payload.impactRiskObjects) ? payload.impactRiskObjects : [];
+        state.solarWindNow = payload.solarWindNow
+          && typeof payload.solarWindNow === 'object'
+          && !Array.isArray(payload.solarWindNow)
+          ? payload.solarWindNow
+          : null;
         state.lastUpdate = Date.now();
         state.error = null;
         draw();
@@ -210,6 +221,8 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
       state.solarEvents = [];
       state.closeApproaches = [];
       state.radioBlackoutScale = null;
+      state.impactRiskObjects = [];
+      state.solarWindNow = null;
     },
 
     getStats() {
@@ -221,12 +234,18 @@ export function createSpaceWeatherLayer({ fetchImpl = null } = {}) {
         kp: state.kp,
         coverage: 'GLOBAL · OVATION FORECAST',
         status: spaceWeatherStatusText(state),
+        // Rendered by DataLayerManager._buildMetaText as the toggle-panel
+        // meta line — see spaceWeatherEnrichmentLabel's own doc comment for
+        // why this is the field that actually reaches the screen.
+        loadingLabel: spaceWeatherEnrichmentLabel(state),
         // Panel enrichments — never undefined, same discipline as the fields
         // above (see the `state` initializer for why: NeoWs bodies have no
         // Earth surface coordinate, so this is their only presentation).
         solarEvents: state.solarEvents,
         closeApproaches: state.closeApproaches,
         radioBlackoutScale: state.radioBlackoutScale,
+        impactRiskObjects: state.impactRiskObjects,
+        solarWindNow: state.solarWindNow,
       };
     },
   };

@@ -407,6 +407,13 @@ async function loadInstallations() {
     state.abort?.abort();
     state.abort = null;
     state.loading = false;
+    // Pins from whatever viewport was last loaded must not stay welded to
+    // the globe while the panel says "zoom in to load" — without this, a
+    // zoom-out left stale entities on screen with no indication they were
+    // no longer backed by the current viewport (same gap as
+    // criticalInfrastructure.js's identical branch).
+    clearRendered();
+    state.records = [];
     clearUnavailableRetry();
     setInstallationStatus('zoom-in', 'Zoom in to load mapped installation context');
     return;

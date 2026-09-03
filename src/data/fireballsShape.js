@@ -24,6 +24,8 @@
  * never `NaN`.
  */
 
+import { finiteOrNull } from './numeric.js';
+
 /**
  * Map one raw CNEOS fireball row to a placeable record by zipping it against
  * the feed's `fields` array and applying the `lat-dir`/`lon-dir` sign
@@ -42,7 +44,7 @@
 export function mapFireballRow(fields, row) {
   if (!Array.isArray(fields) || !Array.isArray(row)) return null;
   const get = (key) => row[fields.indexOf(key)];
-  const num = (v) => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null);
+  const num = finiteOrNull;
   let lat = num(get('lat'));
   let lon = num(get('lon'));
   if (lat === null || lon === null) return null;

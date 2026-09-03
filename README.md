@@ -183,7 +183,7 @@ Twenty-eight tools, four jobs — the commands below come straight from the prod
 
 ## 🛰️ What's on the Globe
 
-Twenty-three live layers. **Nineteen of them need nothing at all** — no key, no account, no signup.
+Twenty-four live layers. **Twenty of them need nothing at all** — no key, no account, no signup.
 
 | Layer | What you get | Source | Auth |
 |-------|--------------|--------|------|
@@ -209,9 +209,10 @@ Twenty-three live layers. **Nineteen of them need nothing at all** — no key, n
 | 🛰️ **IR Satellite** | Near-global infrared cloud cover — cloud-top temperature, not rainfall | RainViewer | 🟢 |
 | ⚓ **Sea Marks** | Buoys, beacons, lighthouses and harbours as a transparent overlay on the globe | OpenSeaMap | 🟢 |
 | ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
+| 🚆 **Rail Network** | World railway tracks, stations and electrification as a transparent overlay on the globe | OpenRailwayMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
 
-**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The two raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
+**Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The three raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
 
 **Missing a layer you want?** Open an issue — or add it and send the PR.
 

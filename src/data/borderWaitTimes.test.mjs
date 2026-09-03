@@ -36,6 +36,20 @@ test('mapWaitTimeEntry: unmatched port_number returns null', () => {
   assert.equal(mapWaitTimeEntry({ port_number: '999999' }, LOCATIONS), null);
 });
 
+test('mapWaitTimeEntry: a port_number that names an Object.prototype key does not resolve to a method', () => {
+  // `locations?.[portNumber]` on a JSON.parse'd plain object would resolve
+  // "constructor" to Object itself — a real record escaping the join with
+  // name/lat/lon all undefined instead of being dropped as unmatched.
+  // Object.hasOwn (used internally by mapWaitTimeEntry) closes that off.
+  for (const portNumber of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.equal(
+      mapWaitTimeEntry({ port_number: portNumber }, LOCATIONS),
+      null,
+      `port_number "${portNumber}" must be treated as unmatched, not resolve via the prototype chain`,
+    );
+  }
+});
+
 test('mapWaitTimeEntry: empty-string delay_minutes becomes null, not NaN', () => {
   const entry = {
     port_number: '070801', border: 'Canadian Border', port_status: 'Open',
@@ -248,6 +262,98 @@ test('crossing wait-time color bands: long (>=60 min) wait is red', async () => 
     const now = Cesium.JulianDate.now();
     assert.ok(entity.point.color.getValue(now).equals(Cesium.Color.RED));
     assert.equal(entity.label.text.getValue(now), '75 min');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('crossing wait-time color bands: the 20 and 60 minute boundaries are exact', async () => {
+  // The doc comment above waitStyle used to say "Moderate (20-60 min)" /
+  // "Long (>= 60 min)" — an overlapping, ambiguous claim at exactly 60. The
+  // code (>= comparisons) is right; this pins the real contract at both
+  // boundaries so the comment can never silently drift from the code again.
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createBorderWaitTimesLayer();
+  const waitMinutesFor = async (waitMinutes) => {
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        crossings: [{ id: '250401', name: 'San Ysidro', border: 'Mexican Border', lat: 32.5437, lon: -117.0304, waitMinutes, status: 'Open' }],
+      }),
+    });
+    await layer.update(viewer);
+    const [entity] = viewer._dataSources[0].entities.values;
+    return entity.point.color.getValue(Cesium.JulianDate.now());
+  };
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    assert.ok((await waitMinutesFor(19)).equals(Cesium.Color.LIME), '19 min is still short/green');
+    assert.ok((await waitMinutesFor(20)).equals(Cesium.Color.YELLOW), '20 min crosses into moderate/yellow');
+    assert.ok((await waitMinutesFor(59)).equals(Cesium.Color.YELLOW), '59 min is still moderate/yellow');
+    assert.ok((await waitMinutesFor(60)).equals(Cesium.Color.RED), '60 min crosses into long/red');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('a Closed crossing renders a distinct color regardless of wait minutes', async () => {
+  // The bug: a crossing with status "Closed" but a short/no reported wait
+  // used to get its color from waitMinutes alone, so it could render GREEN —
+  // "open and fast" — while its label said Closed. Color, not the label, is
+  // what actually reads at globe zoom.
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createBorderWaitTimesLayer();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      crossings: [{ id: '250401', name: 'San Ysidro', border: 'Mexican Border', lat: 32.5437, lon: -117.0304, waitMinutes: 5, status: 'Closed' }],
+    }),
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    await layer.update(viewer);
+    const [entity] = viewer._dataSources[0].entities.values;
+    const color = entity.point.color.getValue(Cesium.JulianDate.now());
+    assert.ok(!color.equals(Cesium.Color.LIME), 'a closed crossing must never read as green/fast');
+    assert.ok(!color.equals(Cesium.Color.GRAY), 'closed is a distinct reading from "no report"');
+    assert.equal(entity.label.text.getValue(Cesium.JulianDate.now()), 'Closed');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('a repeated port_number in the same payload is skipped, not a crash', async () => {
+  // EntityCollection.add throws synchronously on a duplicate id; this used
+  // to surface as a generic "Border wait times network error" (caught by
+  // update()'s broad catch) instead of the actual data-quality problem, and
+  // left the layer showing stale data from the PREVIOUS successful refresh.
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createBorderWaitTimesLayer();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      crossings: [
+        { id: '250401', name: 'San Ysidro', border: 'Mexican Border', lat: 32.5437, lon: -117.0304, waitMinutes: 10, status: 'Open' },
+        { id: '250401', name: 'San Ysidro (dup)', border: 'Mexican Border', lat: 32.5437, lon: -117.0304, waitMinutes: 99, status: 'Open' },
+      ],
+    }),
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    assert.equal(await layer.update(viewer), true, 'a duplicate id must not fail the whole refresh');
+    assert.equal(layer.getStats().error, null);
+    assert.equal(viewer._dataSources[0].entities.values.length, 1, 'only the first of the two duplicates is rendered');
+    assert.equal(layer.getStats().count, 1);
+    assert.equal(layer.getStats().duplicatesSkipped, 1);
   } finally {
     globalThis.fetch = originalFetch;
     layer.destroy(viewer);

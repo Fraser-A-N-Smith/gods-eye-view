@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { mapVolcanoFeature } from './volcanoesShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Active Volcanoes — Smithsonian Institution Global Volcanism Program (GVP),
@@ -84,6 +85,7 @@ export function createVolcanoesLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'volcanoes',
@@ -126,7 +128,9 @@ export function createVolcanoesLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const volcano of payload.volcanoes) {
           const lat = Number(volcano?.lat);
@@ -138,7 +142,7 @@ export function createVolcanoesLayer() {
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = volcano.id || `volcano-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `volcano:${stableId}`,
             position,
             point: {
@@ -171,9 +175,11 @@ export function createVolcanoesLayer() {
               elevationM: volcano.elevationM ?? null,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:Volcanoes] Updated: ${_count} volcanoes`);
@@ -194,6 +200,7 @@ export function createVolcanoesLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -235,6 +242,7 @@ export function createVolcanoesLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };

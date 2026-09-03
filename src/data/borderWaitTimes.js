@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { mapWaitTimeEntry, mapWaitTimeEntries } from './borderWaitTimesShape.js';
+import { addUniqueEntity } from './entityDedupe.js';
 
 /**
  * Border Wait Times — U.S. Customs and Border Protection live crossing wait
@@ -37,13 +38,23 @@ const API_URL = '/api/border-wait-times';
 export { mapWaitTimeEntry, mapWaitTimeEntries };
 
 /**
- * Style by passenger-vehicle wait time:
+ * Style by crossing status, then by passenger-vehicle wait time:
+ *  - Closed (any status other than "Open"/absent): Violet — a distinct color
+ *    from every wait band below. Deciding this from `waitMinutes` alone let
+ *    a closed crossing with no reported wait render GREEN — "open and
+ *    fast" — while its own label said Closed; at globe zoom the color is
+ *    what's actually read; the label is not.
  *  - Unknown (null): Gray — the crossing has nothing to report, not "no wait".
  *  - Short (< 20 min): Green
- *  - Moderate (20-60 min): Yellow
+ *  - Moderate (20–59 min): Yellow
  *  - Long (>= 60 min): Red
+ * @param {number|null} waitMinutes
+ * @param {string|null} [status]
  */
-function waitStyle(waitMinutes) {
+function waitStyle(waitMinutes, status = null) {
+  if (status && status !== 'Open') {
+    return { color: Cesium.Color.fromCssColorString('#8b5cf6'), pixelSize: 8 };
+  }
   if (waitMinutes === null || !Number.isFinite(waitMinutes)) {
     return { color: Cesium.Color.GRAY, pixelSize: 8 };
   }
@@ -90,6 +101,7 @@ export function createBorderWaitTimesLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _duplicatesSkipped = 0;
 
   const layer = {
     id: 'border-wait-times',
@@ -132,7 +144,9 @@ export function createBorderWaitTimesLayer() {
         }
 
         _dataSource.entities.removeAll();
+        const seenIds = new Set();
         let count = 0;
+        let skipped = 0;
 
         for (const crossing of payload.crossings) {
           const lat = Number(crossing?.lat);
@@ -142,11 +156,11 @@ export function createBorderWaitTimesLayer() {
           count++;
           const waitMinutes = Number.isFinite(crossing.waitMinutes) ? crossing.waitMinutes : null;
           const status = crossing.status ?? null;
-          const style = waitStyle(waitMinutes);
+          const style = waitStyle(waitMinutes, status);
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = crossing.id || `crossing-${count}`;
 
-          _dataSource.entities.add({
+          const added = addUniqueEntity(_dataSource.entities, seenIds, {
             id: `border-wait-times:${stableId}`,
             position,
             point: {
@@ -178,9 +192,11 @@ export function createBorderWaitTimesLayer() {
               status,
             },
           });
+          if (!added) skipped++;
         }
 
-        _count = count;
+        _count = count - skipped;
+        _duplicatesSkipped = skipped;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:BorderWaitTimes] Updated: ${_count} crossings`);
@@ -201,6 +217,7 @@ export function createBorderWaitTimesLayer() {
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _duplicatesSkipped = 0;
     },
 
     /**
@@ -241,6 +258,7 @@ export function createBorderWaitTimesLayer() {
         count: _count,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        duplicatesSkipped: _duplicatesSkipped,
       };
     },
   };
