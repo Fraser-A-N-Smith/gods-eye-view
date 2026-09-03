@@ -13,6 +13,8 @@ import {
   parseDonkiNotifications,
   parseNeoFeed,
   parseRadioBlackoutScale,
+  parseSentryRiskList,
+  parseSolarWindNow,
   mergeSpaceWeatherPayload,
   spaceWeatherEnrichmentLabel,
 } from './spaceWeatherShape.js';
@@ -468,6 +470,155 @@ test('aurora rejected throws even when every other source also failed', () => {
     }),
     /ovation down/,
   );
+});
+
+// ── JPL Sentry impact-risk table ──────────────────────────────────────────
+
+test('Sentry risk list maps every documented field and sorts highest-probability first', () => {
+  const payload = {
+    data: [
+      { des: '2010 RF12', fullname: '(2010 RF12)', diameter: '0.007', ip: '0.026', ps_cum: '-3.32', ts_max: '0', v_inf: '5.3', last_obs: '2022-09-05' },
+      { des: '2023 TL4', fullname: '(2023 TL4)', diameter: '0.05', ip: '0.11', ps_cum: '-2.9', ts_max: '0', v_inf: '9.1', last_obs: '2023-11-01' },
+    ],
+  };
+  const objects = parseSentryRiskList(payload);
+  assert.equal(objects.length, 2);
+  assert.equal(objects[0].designation, '2023 TL4', 'higher impact probability sorts first');
+  assert.deepEqual(objects[0], {
+    designation: '2023 TL4',
+    fullname: '(2023 TL4)',
+    diameterKm: 0.05,
+    impactProbability: 0.11,
+    palermoScale: -2.9,
+    torinoScale: 0,
+    velocityKmS: 9.1,
+    lastObservedDate: '2023-11-01',
+  });
+});
+
+test('Sentry entries missing a designation are dropped, and the cap/empty/junk cases degrade rather than throw', () => {
+  assert.equal(parseSentryRiskList({ data: [{ ip: '0.5' }] }).length, 0, 'no des → dropped');
+  assert.deepEqual(parseSentryRiskList(null), []);
+  assert.deepEqual(parseSentryRiskList({}), []);
+  const many = { data: Array.from({ length: 30 }, (_, i) => ({ des: `obj-${i}`, ip: String(i) })) };
+  assert.equal(parseSentryRiskList(many).length, 20, 'caps at maxItems');
+  assert.equal(parseSentryRiskList(many)[0].designation, 'obj-29', 'still sorted before the cap is applied');
+});
+
+// ── NOAA SWPC real-time solar wind ────────────────────────────────────────
+
+const PLASMA_HEADER = ['time_tag', 'density', 'speed', 'temperature'];
+const MAG_HEADER = ['time_tag', 'bx_gsm', 'by_gsm', 'bz_gsm', 'lon_gsm', 'lat_gsm', 'bt'];
+
+test('solar wind reads the LAST row of each product by header name, not position', () => {
+  const plasma = [
+    PLASMA_HEADER,
+    ['2026-08-30 00:00:00.000', '4.1', '380.2', '95000'],
+    ['2026-08-30 00:01:00.000', '4.3', '402.7', '97000'],
+  ];
+  const mag = [
+    MAG_HEADER,
+    ['2026-08-30 00:00:00.000', '1.1', '-2.2', '-3.3', '10', '5', '4.5'],
+    ['2026-08-30 00:01:00.000', '1.4', '-2.6', '-5.1', '11', '6', '5.9'],
+  ];
+  const result = parseSolarWindNow(plasma, mag);
+  assert.deepEqual(result, {
+    speedKmS: 402.7,
+    density: 4.3,
+    bz: -5.1,
+    bt: 5.9,
+    sampledAtMs: Date.parse('2026-08-30 00:01:00.000Z'),
+  });
+});
+
+test('solar wind: a missing plasma or mag product nulls only its own fields, not both', () => {
+  const plasma = [PLASMA_HEADER, ['2026-08-30 00:01:00.000', '4.3', '402.7', '97000']];
+  const mag = [MAG_HEADER, ['2026-08-30 00:01:00.000', '1.4', '-2.6', '-5.1', '11', '6', '5.9']];
+
+  const plasmaOnly = parseSolarWindNow(plasma, null);
+  assert.equal(plasmaOnly.speedKmS, 402.7);
+  assert.equal(plasmaOnly.density, 4.3);
+  assert.equal(plasmaOnly.bz, null);
+  assert.equal(plasmaOnly.bt, null);
+
+  const magOnly = parseSolarWindNow(null, mag);
+  assert.equal(magOnly.speedKmS, null);
+  assert.equal(magOnly.density, null);
+  assert.equal(magOnly.bz, -5.1);
+  assert.equal(magOnly.bt, 5.9);
+});
+
+test('solar wind: both products missing/malformed yields an all-null reading rather than throwing', () => {
+  assert.deepEqual(parseSolarWindNow(null, null), {
+    speedKmS: null, density: null, bz: null, bt: null, sampledAtMs: null,
+  });
+  assert.deepEqual(parseSolarWindNow({ not: 'an array' }, undefined), {
+    speedKmS: null, density: null, bz: null, bt: null, sampledAtMs: null,
+  });
+  assert.deepEqual(parseSolarWindNow([PLASMA_HEADER], [MAG_HEADER]), {
+    speedKmS: null, density: null, bz: null, bt: null, sampledAtMs: null,
+  }, 'a header row with no data row is not a reading');
+});
+
+// ── Sentry/solar-wind wired into the eight-source merge ──────────────────
+
+function fulfilledSentry() {
+  return { status: 'fulfilled', value: { data: [{ des: '2023 TL4', ip: '0.11' }] } };
+}
+function fulfilledPlasma() {
+  return { status: 'fulfilled', value: [PLASMA_HEADER, ['2026-08-30 00:01:00.000', '4.3', '402.7', '97000']] };
+}
+function fulfilledMag() {
+  return { status: 'fulfilled', value: [MAG_HEADER, ['2026-08-30 00:01:00.000', '1.4', '-2.6', '-5.1', '11', '6', '5.9']] };
+}
+
+test('a merged payload carrying Sentry and both solar-wind products surfaces impactRiskObjects and solarWindNow', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: fulfilledDonki(),
+    neoResult: fulfilledNeo(),
+    scalesResult: fulfilledScales(),
+    sentryResult: fulfilledSentry(),
+    plasmaResult: fulfilledPlasma(),
+    magResult: fulfilledMag(),
+  });
+  assert.equal(merged.impactRiskObjects.length, 1);
+  assert.equal(merged.impactRiskObjects[0].designation, '2023 TL4');
+  assert.equal(merged.solarWindNow.speedKmS, 402.7);
+  assert.equal(merged.solarWindNow.bz, -5.1);
+});
+
+test('Sentry/plasma/mag rejected leaves aurora, Kp, and the five pre-existing fields intact', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: fulfilledDonki(),
+    neoResult: fulfilledNeo(),
+    scalesResult: fulfilledScales(),
+    sentryResult: rejected('sentry.api 500'),
+    plasmaResult: rejected('plasma-7-day.json 500'),
+    magResult: rejected('mag-7-day.json 500'),
+  });
+  assert.equal(merged.aurora.length, 1);
+  assert.ok(Math.abs(merged.kp - 6.33) < 1e-9);
+  assert.equal(merged.solarEvents.length, 1);
+  assert.equal(merged.closeApproaches.length, 1);
+  assert.deepEqual(merged.radioBlackoutScale, { scale: '2', text: 'Moderate radio blackout' });
+  assert.deepEqual(merged.impactRiskObjects, []);
+  assert.equal(merged.solarWindNow, null, 'both solar-wind sources down together yields null, not a half-filled object');
+});
+
+test('omitting the three new result params entirely (call-site not yet upgraded) still merges cleanly', () => {
+  const merged = mergeSpaceWeatherPayload({
+    auroraResult: fulfilledAurora(),
+    kpResult: fulfilledKp(),
+    donkiResult: fulfilledDonki(),
+    neoResult: fulfilledNeo(),
+    scalesResult: fulfilledScales(),
+  });
+  assert.deepEqual(merged.impactRiskObjects, []);
+  assert.equal(merged.solarWindNow, null);
 });
 
 // spaceWeatherEnrichmentLabel is the ONLY place solarEvents/closeApproaches/

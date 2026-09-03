@@ -173,6 +173,72 @@ test('an array radioBlackoutScale on the wire is rejected too — typeof [] === 
   assert.equal(layer.getStats().radioBlackoutScale, null);
 });
 
+test('impactRiskObjects and solarWindNow are [] / null when the proxy omits them', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({ ok: true, json: async () => ({ aurora: [], kpAvailable: false }) }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.deepEqual(stats.impactRiskObjects, []);
+  assert.equal(stats.solarWindNow, null);
+  assert.notEqual(stats.impactRiskObjects, undefined);
+});
+
+test('a merged payload carrying Sentry and solar-wind data surfaces both on getStats()', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [],
+        kpAvailable: false,
+        impactRiskObjects: [
+          { designation: '2023 TL4', fullname: '(2023 TL4)', diameterKm: 0.05, impactProbability: 0.11, palermoScale: -2.9, torinoScale: 0, velocityKmS: 9.1, lastObservedDate: '2023-11-01' },
+        ],
+        solarWindNow: { speedKmS: 402.7, density: 4.3, bz: -5.1, bt: 5.9, sampledAtMs: 1756540860000 },
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.equal(stats.impactRiskObjects.length, 1);
+  assert.equal(stats.impactRiskObjects[0].designation, '2023 TL4');
+  assert.deepEqual(stats.solarWindNow, { speedKmS: 402.7, density: 4.3, bz: -5.1, bt: 5.9, sampledAtMs: 1756540860000 });
+  // The aurora/Kp contract is unaffected by the presence of the new panel fields.
+  assert.equal(stats.count, 0);
+});
+
+test('a non-array impactRiskObjects or non-object solarWindNow on the wire degrades to the safe default', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        aurora: [], kpAvailable: false,
+        impactRiskObjects: 'not-an-array',
+        solarWindNow: 'not-an-object',
+      }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  const stats = layer.getStats();
+  assert.deepEqual(stats.impactRiskObjects, []);
+  assert.equal(stats.solarWindNow, null);
+});
+
+test('an array solarWindNow on the wire is rejected too — typeof [] === "object" is not enough', async () => {
+  const layer = createSpaceWeatherLayer({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ aurora: [], kpAvailable: false, solarWindNow: [1, 2, 3] }),
+    }),
+  });
+  layer.enable();
+  assert.equal(await layer.update(), true);
+  assert.equal(layer.getStats().solarWindNow, null);
+});
+
 test('the DONKI/NeoWs/NOAA-scales enrichments reach getStats().loadingLabel — the field the toggle panel actually renders', async () => {
   const layer = createSpaceWeatherLayer({
     fetchImpl: async () => ({

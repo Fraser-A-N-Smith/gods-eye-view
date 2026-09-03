@@ -256,14 +256,119 @@ export function parseRadioBlackoutScale(payload) {
 }
 
 /**
- * Merge the five `Promise.allSettled` results from `spaceWeatherProxy`'s
- * upstream fan-out (aurora, Kp, DONKI, NeoWs, NOAA scales) into the payload
- * the client layer consumes.
+ * Parse the NASA JPL Sentry impact-risk summary list.
+ *
+ * Sentry is a STANDING risk table (which currently-known objects have a
+ * nonzero cumulative impact probability over the whole span JPL has
+ * computed), not an event feed — unlike NeoWs above, there is no "today"
+ * here. Confidence note: the summary endpoint's exact field names were
+ * confirmed against indexed API documentation, not a live raw response, in
+ * the research session that produced this task (this sandbox's egress
+ * policy blocks ssd-api.jpl.nasa.gov directly) — verify the response shape
+ * against a live request before trusting this in production.
+ *
+ * Field names per JPL's SentryObject: `des` (designation), `fullname`,
+ * `diameter` (km), `ip` (cumulative impact probability), `ps_cum`
+ * (cumulative Palermo Scale), `ts_max` (max Torino Scale), `v_inf` (impact
+ * velocity, km/s), `last_obs` (last observation date). No Earth-surface
+ * coordinate — same reasoning NeoWs close approaches are panel-only, not
+ * globe entities.
+ *
+ * @param {*} payload Parsed `sentry.api` summary-list response.
+ * @param {object} [options]
+ * @param {number} [options.maxItems] Cap on returned objects.
+ * @returns {Array<{designation:string, fullname:string|null, diameterKm:number|null,
+ *   impactProbability:number|null, palermoScale:number|null, torinoScale:number|null,
+ *   velocityKmS:number|null, lastObservedDate:string|null}>}
+ */
+export function parseSentryRiskList(payload, { maxItems = 20 } = {}) {
+  const raw = Array.isArray(payload?.data) ? payload.data : [];
+  const objects = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const designation = textOrNull(entry.des);
+    if (!designation) continue;
+    objects.push({
+      designation,
+      fullname: textOrNull(entry.fullname),
+      diameterKm: finiteOrNull(entry.diameter),
+      impactProbability: finiteOrNull(entry.ip),
+      palermoScale: finiteOrNull(entry.ps_cum),
+      torinoScale: finiteOrNull(entry.ts_max),
+      velocityKmS: finiteOrNull(entry.v_inf),
+      lastObservedDate: textOrNull(entry.last_obs),
+    });
+  }
+  // Highest cumulative impact probability first — the reason a "risk" table
+  // gets read at all. Objects with no reported ip sort last, not first.
+  objects.sort((a, b) => (b.impactProbability ?? -1) - (a.impactProbability ?? -1));
+  return objects.slice(0, maxItems);
+}
+
+/**
+ * Read the latest row of one NOAA SWPC solar-wind product
+ * (`plasma-7-day.json` or `mag-7-day.json`).
+ *
+ * Same shape family as `parsePlanetaryKp` above: a CSV-like array of arrays
+ * whose first row is a header, appended over time, so the LAST row is
+ * current. Columns are read BY HEADER NAME, not fixed position, so an
+ * upstream column reorder fails a test here rather than silently
+ * mis-mapping a field (same discipline `parsePlanetaryKp` already
+ * established for this reason).
+ *
+ * @param {Array<Array<string>>} payload Parsed plasma-7-day.json or mag-7-day.json.
+ * @param {Array<string>} columnNames Header names to read, in priority order tried per field.
+ * @returns {{row: Array<string>|null, header: Array<string>|null}}
+ */
+function latestSolarWindRow(payload) {
+  if (!Array.isArray(payload) || payload.length < 2) return { row: null, header: null };
+  const header = payload[0];
+  if (!Array.isArray(header)) return { row: null, header: null };
+  const row = payload.at(-1);
+  return Array.isArray(row) ? { row, header } : { row: null, header: null };
+}
+
+function columnValue(header, row, pattern) {
+  const index = header.findIndex((name) => pattern.test(String(name)));
+  return index >= 0 ? row[index] : undefined;
+}
+
+/**
+ * Combine the latest plasma + magnetic-field rows into one "solar wind now"
+ * reading. Either input may independently be unavailable (each is its own
+ * `Promise.allSettled` branch in the proxy) — a missing plasma row nulls
+ * only `speedKmS`/`density`, a missing mag row nulls only `bz`/`bt`, exactly
+ * the same per-field independent-failure discipline the rest of this module
+ * already applies to DONKI/NeoWs/NOAA-scales.
+ *
+ * @param {*} plasmaPayload Parsed plasma-7-day.json, or null if that fetch failed.
+ * @param {*} magPayload Parsed mag-7-day.json, or null if that fetch failed.
+ * @returns {{speedKmS:number|null, density:number|null, bz:number|null, bt:number|null, sampledAtMs:number|null}}
+ */
+export function parseSolarWindNow(plasmaPayload, magPayload) {
+  const plasma = latestSolarWindRow(plasmaPayload);
+  const mag = latestSolarWindRow(magPayload);
+  const speedKmS = plasma.row ? finiteOrNull(columnValue(plasma.header, plasma.row, /^speed$/i)) : null;
+  const density = plasma.row ? finiteOrNull(columnValue(plasma.header, plasma.row, /^density$/i)) : null;
+  const bz = mag.row ? finiteOrNull(columnValue(mag.header, mag.row, /^bz_gsm$/i)) : null;
+  const bt = mag.row ? finiteOrNull(columnValue(mag.header, mag.row, /^bt$/i)) : null;
+  const plasmaTimeTag = plasma.row ? columnValue(plasma.header, plasma.row, /^time_tag$/i) : null;
+  const magTimeTag = mag.row ? columnValue(mag.header, mag.row, /^time_tag$/i) : null;
+  // Whichever product actually produced a row — a plasma-only or mag-only
+  // outage should not blank the timestamp for the half that still arrived.
+  const sampledAtMs = finiteOrNull(Date.parse(String(plasmaTimeTag ?? magTimeTag ?? '')));
+  return { speedKmS, density, bz, bt, sampledAtMs };
+}
+
+/**
+ * Merge the eight `Promise.allSettled` results from `spaceWeatherProxy`'s
+ * upstream fan-out (aurora, Kp, DONKI, NeoWs, NOAA scales, Sentry, solar-wind
+ * plasma, solar-wind mag) into the payload the client layer consumes.
  *
  * Pulled out of `vite.config.js` so the per-source independent-failure
- * guarantee — a DONKI/NeoWs/NOAA-scales rejection blanks only its own field
- * and never touches the aurora oval or Kp index, and (the reverse) a
- * rejection of any of the four optional sources never blanks any of the
+ * guarantee — a DONKI/NeoWs/NOAA-scales/Sentry/plasma/mag rejection blanks
+ * only its own field and never touches the aurora oval or Kp index, and (the
+ * reverse) a rejection of any one optional source never blanks any of the
  * others — is a plain, directly unit-testable function rather than
  * something only verifiable by reading the proxy's closure. If that merge
  * step is ever refactored and accidentally lets one rejection blank another
@@ -283,11 +388,17 @@ export function parseRadioBlackoutScale(payload) {
  * @param {PromiseSettledResult<*>} results.donkiResult
  * @param {PromiseSettledResult<*>} results.neoResult
  * @param {PromiseSettledResult<*>} results.scalesResult
+ * @param {PromiseSettledResult<*>} [results.sentryResult]
+ * @param {PromiseSettledResult<*>} [results.plasmaResult]
+ * @param {PromiseSettledResult<*>} [results.magResult]
  * @returns {object} The merged payload (pre-`JSON.stringify`; the proxy adds
  *   `attribution`/`fetchedAt` on top).
  * @throws {*} `auroraResult.reason` when the aurora fetch itself failed.
  */
-export function mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, neoResult, scalesResult }) {
+export function mergeSpaceWeatherPayload({
+  auroraResult, kpResult, donkiResult, neoResult, scalesResult,
+  sentryResult, plasmaResult, magResult,
+}) {
   if (auroraResult.status !== 'fulfilled') throw auroraResult.reason;
   const aurora = parseAuroraGrid(auroraResult.value);
   const kp = kpResult.status === 'fulfilled'
@@ -302,6 +413,18 @@ export function mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, 
   const radioBlackoutScale = scalesResult.status === 'fulfilled'
     ? parseRadioBlackoutScale(scalesResult.value)
     : null;
+  const impactRiskObjects = sentryResult?.status === 'fulfilled'
+    ? parseSentryRiskList(sentryResult.value)
+    : [];
+  const plasmaOk = plasmaResult?.status === 'fulfilled';
+  const magOk = magResult?.status === 'fulfilled';
+  // Both sources down (or both simply absent, e.g. an un-upgraded call site)
+  // reads as no reading at all — null, not an all-null-fielded object —
+  // matching the sibling convention `radioBlackoutScale` already uses when
+  // its own single source fails.
+  const solarWindNow = (plasmaOk || magOk)
+    ? parseSolarWindNow(plasmaOk ? plasmaResult.value : null, magOk ? magResult.value : null)
+    : null;
 
   return {
     aurora: aurora.points,
@@ -315,6 +438,8 @@ export function mergeSpaceWeatherPayload({ auroraResult, kpResult, donkiResult, 
     solarEvents,
     closeApproaches,
     radioBlackoutScale,
+    impactRiskObjects,
+    solarWindNow,
   };
 }
 

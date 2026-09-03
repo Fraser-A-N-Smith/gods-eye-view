@@ -311,11 +311,16 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'fireballs', token: '7', disposition: 'enabled-only' }),
   Object.freeze({ id: 'flights', token: 'f', disposition: 'enabled+options', optionOwner: 'flights' }),
   Object.freeze({
-    id: 'gdelt-cameo-events', token: '8', disposition: 'enabled+options', optionOwner: 'gdelt-cameo-events',
+    // 'A' — reassigned here from '8' during the main merge that added
+    // 'internet-outages' at the same token: [a-z0-9] (36 slots) is fully
+    // spoken for by the registry at this size, so new entries now draw from
+    // the widened [a-zA-Z0-9] grammar (see the note on the token check below).
+    id: 'gdelt-cameo-events', token: 'A', disposition: 'enabled+options', optionOwner: 'gdelt-cameo-events',
   }),
   Object.freeze({ id: 'gdelt-events', token: 'n', disposition: 'enabled-only' }),
   Object.freeze({ id: 'global-hazards', token: 'v', disposition: 'enabled-only' }),
   Object.freeze({ id: 'ham-radio-propagation', token: '4', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'internet-outages', token: '8', disposition: 'enabled-only' }),
   Object.freeze({ id: 'local-dams', token: 'q', disposition: 'enabled-only' }),
   Object.freeze({ id: 'local-datacenters', token: 'd', disposition: 'enabled-only' }),
   Object.freeze({ id: 'local-firms', token: 'w', disposition: 'enabled-only' }),
