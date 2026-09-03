@@ -759,6 +759,8 @@ class CockpitViewController {
     this.localCondition = document.getElementById('cockpit-local-condition');
     this.localCloud = document.getElementById('cockpit-local-cloud');
     this.localPrecipitation = document.getElementById('cockpit-local-precipitation');
+    this.humanitarianStatus = document.getElementById('cockpit-humanitarian-status');
+    this.humanitarianList = document.getElementById('cockpit-humanitarian-list');
     this.signalCollapsed = false;
     this.signalUserCollapsed = false;
     this.signalItems = [];
@@ -1790,6 +1792,14 @@ class CockpitViewController {
     if (status === 'unavailable') this.newsList?.replaceChildren();
     if (this.localPlace && status === 'loading') this.localPlace.textContent = 'RESOLVING REGION';
     if (this.localPlace && status === 'unavailable') this.localPlace.textContent = 'REGION UNAVAILABLE';
+    if (this.humanitarianStatus) {
+      this.humanitarianStatus.hidden = false;
+      this.humanitarianStatus.dataset.state = status;
+      this.humanitarianStatus.textContent = status === 'loading'
+        ? 'ACQUIRING HUMANITARIAN CONTEXT'
+        : 'HUMANITARIAN CONTEXT UNAVAILABLE';
+    }
+    if (status === 'unavailable') this.humanitarianList?.replaceChildren();
     this.updateLocalPosition(info);
   }
 
@@ -1842,6 +1852,31 @@ class CockpitViewController {
     if (this.localPrecipitation) {
       this.localPrecipitation.textContent = Number.isFinite(weather?.precipitationMm)
         ? weather.precipitationMm.toFixed(1) : '—';
+    }
+    const humanitarianReports = Array.isArray(payload?.humanitarianReports) ? payload.humanitarianReports : [];
+    if (this.humanitarianStatus) {
+      const humanitarianStatus = payload?.humanitarianStatus || 'unavailable';
+      this.humanitarianStatus.hidden = humanitarianReports.length > 0;
+      this.humanitarianStatus.dataset.state = humanitarianStatus;
+      this.humanitarianStatus.textContent = humanitarianStatus === 'empty'
+        ? 'NO RECENT REPORTS FOR THIS COUNTRY'
+        : (humanitarianStatus === 'stale' ? 'HUMANITARIAN CONTEXT — LAST KNOWN' : 'HUMANITARIAN CONTEXT UNAVAILABLE');
+    }
+    if (this.humanitarianList) {
+      this.humanitarianList.replaceChildren(...humanitarianReports.map((report) => {
+        const entry = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = report.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        const title = document.createElement('strong');
+        title.textContent = report.title;
+        const metadata = document.createElement('span');
+        metadata.textContent = `RELIEFWEB · ${formatCockpitBriefAge(report.date)}`;
+        link.append(title, metadata);
+        entry.append(link);
+        return entry;
+      }));
     }
     if (this.signalStream) this.signalStream.dataset.regionalStatus = payload?.status || 'partial';
     if (this.briefPageIndex === 1 && this.briefSource) {

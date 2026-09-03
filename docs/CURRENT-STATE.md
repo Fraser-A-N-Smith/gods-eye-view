@@ -1,6 +1,84 @@
 # God's Eye View Current State
 
-Updated: August 30, 2026
+Updated: August 31, 2026
+
+> **2026-08-31 — ReliefWeb humanitarian context in the cockpit Local Info page**
+> (`normalizeReliefWebReports` in `src/data/regionalBrief.js`,
+> `fetchReliefWebReports` in `vite.config.js`, `src/data/iso3166.js`). Not a
+> globe layer — ReliefWeb's own reports are country-level, no point
+> coordinates, so a globe dot would overclaim precision the data doesn't
+> have.
+>
+> **Rides along in the existing `/api/regional-brief` response rather than a
+> new endpoint or a new tabbed cockpit page.** That endpoint already resolves
+> a Nominatim country code for the same request; a second geocoding call
+> would have been pure waste. `src/data/iso3166.js` converts Nominatim's
+> alpha-2 code to the alpha-3 ReliefWeb's `country.iso3` filter needs — a
+> static standards table, no network dependency.
+>
+> **Independently optional, same discipline as the space-weather panel's
+> DONKI/NeoWs fields.** A ReliefWeb outage degrades only its own
+> `humanitarianStatus`/`humanitarianReports` fields to `'unavailable'`/`[]`;
+> it can never blank the place, weather, or news fields the endpoint already
+> promised, and vice versa. Cached separately by country for 30 minutes
+> (reports move on a humanitarian-response cadence, not a news cadence),
+> nested inside the existing regional-brief cache/rate-limit/coalescing
+> infrastructure rather than duplicating it.
+
+> **2026-08-31 — ACLED Events layer** (`src/data/acledEvents.js`,
+> `acledEventsShape.js`, `acledEventsProxy` in `vite.config.js`). Optional
+> bring-your-own-key layer, same shape as the existing Global Fishing Watch
+> vessel-events integration.
+>
+> **Human-coded, not machine-extracted — the highest-confidence conflict
+> layer this app has.** Both GDELT layers pull structure out of news text
+> automatically; ACLED's own regional research teams code each record from
+> media, partner, and local source reporting, geocoded to a specific
+> locality where possible with an explicit `geo_precision` flag. Still not
+> first-hand verification — every record's `caveat` field says so, attached
+> at the shape-normalization layer so no render path can drop it, same
+> discipline as the vessel-events layer's per-record hedge.
+>
+> **Off by default, and a missing key is a configured state, not an error.**
+> `/api/acled-events` returns `503 {error:'no_key'}` until the operator sets
+> both `ACLED_API_KEY` and `ACLED_API_EMAIL` (ACLED needs both, not a single
+> bearer token). The layer reads that as `KEY REQUIRED`, distinct from an
+> actual fetch failure — `getStats().unavailable` carries the distinction so
+> the toggle panel's honest-chip reducer never paints a keyless install red.
+>
+> **Free for non-commercial use only, under ACLED's own EULA — not a
+> Creative Commons license.** Documented in `DATA_SOURCES.md` alongside the
+> Global Fishing Watch and TeleGeography NonCommercial carve-outs; a
+> commercial deployment leaves both env vars unset.
+
+> **2026-08-31 — GDELT Event 2.0 "Geopolitical Events" layer**
+> (`src/data/gdeltCameoEvents.js`, `gdeltCameoEventsShape.js`,
+> `gdeltCameoEventsProxy` in `vite.config.js`). CAMEO-typed, actor/action-geocoded
+> reported events, distinct from the existing GEO 2.0 "Global Reporting"
+> mentions-only layer (`gdeltEvents.js`).
+>
+> **A dot here is a REPORTED EVENT, still not a confirmed incident.** Same
+> discipline as the mentions layer: these are machine-extracted from news
+> text by GDELT's own pipeline, not human-vetted. Every record also carries
+> an explicit `precision` (country/region/locality), derived from GDELT's own
+> geo-resolution type, so a country-level dot can never read as street-level.
+>
+> **The Event Database has no queryable API — it's bulk 15-minute exports.**
+> Unlike GEO 2.0, there is no per-theme REST endpoint upstream: GDELT
+> publishes a zipped, tab-delimited, headerless world CSV every 15 minutes.
+> Re-creating the mentions layer's 24h framing would mean re-downloading up
+> to 96 files, so the proxy instead keeps a ROLLING BUFFER: each poll fetches
+> only the newest interval (via `lastupdate.txt`), and a cold start backfills
+> a handful of recent intervals rather than a full day. `getStats().warming`
+> distinguishes "the buffer hasn't filled yet" from "nothing is happening" —
+> an empty result right after boot must never read as a quiet world.
+>
+> **The preset switcher actually has a UI, this time.** The existing mentions
+> layer's `getPresets()/setPreset()` has no chip row wired up anywhere in the
+> app. This layer implements the `enabled+options` contract
+> (`getParams`/`setParams`) plus `getRowControls()`, so its three themes
+> (unrest/conflict/diplomacy) are switchable from the toggle panel, not just
+> from a test file.
 
 > **2026-08-30 — photoreal source chain** (`src/photorealTileset.js`).
 > Startup no longer throws without a Google Maps key.

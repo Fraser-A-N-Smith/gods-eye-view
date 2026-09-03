@@ -18,11 +18,14 @@ const PENDING_TRACKING_POLL_MS = 1_000;
 const TRACKING_ID_GRAMMAR = /^[0-9a-z~_-]{1,16}$/;
 /**
  * Ceilings for the untrusted v2 layer fields. Both are far above any legitimate
- * payload (16 one-character tokens; a dozen short option assignments), so a
- * value past them is malformed or hostile. Reject the WHOLE payload, matching
- * the unknown-token rule — never salvage a prefix.
+ * payload — every layer enabled at once is `2 * REGISTERED_LAYER_IDS.length - 1`
+ * dot-joined one-character tokens (36 layers → 71 chars as of 2026-08-31; kept
+ * with real headroom above that, not tuned to the current count) plus a dozen
+ * short option assignments — so a value past them is malformed or hostile.
+ * Reject the WHOLE payload, matching the unknown-token rule — never salvage a
+ * prefix.
  */
-const MAX_ENABLED_LAYERS_CHARS = 64;
+const MAX_ENABLED_LAYERS_CHARS = 160;
 const MAX_LAYER_OPTIONS_CHARS = 512;
 export const LAYER_STATE_STORAGE_KEY = 'gev:layer-state:v2';
 export const LAYER_RESTORE_ORIGINS = Object.freeze({
@@ -182,6 +185,19 @@ function integerOption(key, token, defaultValue) {
 }
 
 const OPTION_GROUPS = Object.freeze({
+  'acled-events': Object.freeze([
+    enumOption('preset', 'p', 'battles', [
+      'battles', 'violence-against-civilians', 'explosions-remote-violence', 'riots', 'protests',
+      'strategic-developments',
+    ], {
+      battles: 'b',
+      'violence-against-civilians': 'v',
+      'explosions-remote-violence': 'e',
+      riots: 'r',
+      protests: 'p',
+      'strategic-developments': 's',
+    }),
+  ]),
   flights: Object.freeze([
     // Product invariant 2026-08-22: the fleet's 3D models are DEFAULT-ON in
     // PROXIMITY mode. Proximity is itself the altitude/count gate — models only
@@ -222,6 +238,13 @@ const OPTION_GROUPS = Object.freeze({
     }),
     booleanOption('showProjection', 'p', true),
     booleanOption('autoHop', 'a', false),
+  ]),
+  'gdelt-cameo-events': Object.freeze([
+    enumOption('preset', 'p', 'unrest', ['unrest', 'conflict', 'diplomacy'], {
+      unrest: 'u',
+      conflict: 'c',
+      diplomacy: 'd',
+    }),
   ]),
   radio: Object.freeze([
     Object.freeze({
@@ -275,6 +298,9 @@ export const SHARE_TRACKING_RESTORE_POLICIES = Object.freeze({
  * owns stable URL ordering.
  */
 export const LAYER_STATE_REGISTRY = Object.freeze([
+  Object.freeze({
+    id: 'acled-events', token: '9', disposition: 'enabled+options', optionOwner: 'acled-events',
+  }),
   Object.freeze({ id: 'ais-live-vessels', token: 'a', disposition: 'enabled-only' }),
   Object.freeze({ id: 'bikeshare', token: 'b', disposition: 'enabled-only' }),
   Object.freeze({ id: 'border-wait-times', token: '6', disposition: 'enabled-only' }),
@@ -284,6 +310,13 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'fire-perimeters', token: 'p', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fireballs', token: '7', disposition: 'enabled-only' }),
   Object.freeze({ id: 'flights', token: 'f', disposition: 'enabled+options', optionOwner: 'flights' }),
+  Object.freeze({
+    // 'A' — reassigned here from '8' during the main merge that added
+    // 'internet-outages' at the same token: [a-z0-9] (36 slots) is fully
+    // spoken for by the registry at this size, so new entries now draw from
+    // the widened [a-zA-Z0-9] grammar (see the note on the token check below).
+    id: 'gdelt-cameo-events', token: 'A', disposition: 'enabled+options', optionOwner: 'gdelt-cameo-events',
+  }),
   Object.freeze({ id: 'gdelt-events', token: 'n', disposition: 'enabled-only' }),
   Object.freeze({ id: 'global-hazards', token: 'v', disposition: 'enabled-only' }),
   Object.freeze({ id: 'ham-radio-propagation', token: '4', disposition: 'enabled-only' }),
@@ -355,7 +388,12 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    if (!/^[a-z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // [a-z0-9] alone is 36 slots, exactly the current registry size — case is
+    // significant in the URL codec (no lowercasing anywhere in encode/decode),
+    // so widening to [a-zA-Z0-9] (62 slots) is a free, backward-compatible
+    // headroom increase: every already-issued lowercase/digit token keeps
+    // decoding identically.
+    if (!/^[a-zA-Z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

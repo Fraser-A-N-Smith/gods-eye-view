@@ -3,7 +3,7 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
-## [Unreleased] — 2026-08-31
+## [Unreleased] — 2026-08-31 (d)
 
 ### Added
 
@@ -23,6 +23,50 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   segment short enough that a curve is a reasonable inference (below
   `MAX_SMOOTH_SEGMENT_M`) is curved, so a sparse or gapped stretch still
   renders as the straight chord it actually is.
+
+## [Unreleased] — 2026-08-31 (c)
+
+### Added
+
+- Added ReliefWeb (UN OCHA) humanitarian-response context to the cockpit
+  Local Info page — country-matched report links, riding along in the
+  existing `/api/regional-brief` response as an independently-optional
+  field (a ReliefWeb outage never blanks the place/weather/news fields,
+  same discipline as the space-weather panel's DONKI/NeoWs fields). Not a
+  globe layer: ReliefWeb's reports are country-level, not point-geocoded.
+- Added `src/data/iso3166.js`, a static ISO 3166-1 alpha-2→alpha-3 lookup,
+  so the existing Nominatim country resolution can also drive ReliefWeb's
+  `country.iso3` filter without a second geocoding round-trip.
+
+## [Unreleased] — 2026-08-31 (b)
+
+### Added
+
+- Added an optional ACLED Events layer (`acled-events`), bring-your-own-key
+  like the existing Global Fishing Watch vessel-events layer. ACLED's
+  regional research teams human-code each record from media, partner, and
+  local source reporting — higher confidence than either GDELT layer, still
+  not first-hand verification, and every record carries that hedge. Off by
+  default; requires the operator's own free `ACLED_API_KEY` +
+  `ACLED_API_EMAIL`, and reads `KEY REQUIRED` rather than erroring when
+  absent. Free for non-commercial use only under ACLED's own EULA.
+
+## [Unreleased] — 2026-08-31 (a)
+
+### Added
+
+- Added a "Geopolitical Events" globe layer (`gdelt-cameo-events`), backed by
+  GDELT's Event Database 2.0 — CAMEO-typed, actor/action-geocoded reported
+  events (unrest, conflict, diplomacy presets), distinct from the existing
+  "Global Reporting" mentions-only layer. `/api/gdelt/cameo-events` polls
+  GDELT's 15-minute bulk export feed and keeps a rolling ~3-hour buffer
+  rather than re-fetching a full day of history; a fresh server reads as
+  "warming up" instead of empty while it backfills. Every record carries an
+  explicit precision flag (country/region/locality) and is presented as a
+  reported event, never a confirmed incident.
+- The layer's theme switcher has a real, working chip row
+  (`getRowControls()`/`setParams`), which the existing mentions layer's own
+  preset switcher has never had wired up in the UI.
 
 ## [Unreleased] — 2026-08-30 (g)
 

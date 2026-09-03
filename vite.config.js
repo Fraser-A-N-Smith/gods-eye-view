@@ -42,6 +42,19 @@ import {
 import { filterTrailing24h, parseFirmsCsv } from './src/data/firmsCsv.js';
 import { normalizePerimeterCollection } from './src/data/firePerimetersShape.js';
 import { resolvePreset as resolveGdeltPreset, normalizeGdeltCollection } from './src/data/gdeltEventsShape.js';
+import { unzipSync, strFromU8 } from 'fflate';
+import {
+  resolveCameoPreset,
+  parseCameoExport,
+  parseLastUpdateText,
+  exportUrlForInterval,
+  previousIntervalId,
+  parseIntervalId,
+  pruneStaleIntervals,
+  mergeIntervalRecords,
+  sliceRecordsForPreset,
+} from './src/data/gdeltCameoEventsShape.js';
+import { resolveAcledPreset, normalizeAcledEvents } from './src/data/acledEventsShape.js';
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
@@ -67,7 +80,9 @@ import {
   normalizeRegionalArticles,
   normalizeRegionalPlace,
   normalizeRegionalWeather,
+  normalizeReliefWebReports,
 } from './src/data/regionalBrief.js';
+import { alpha2ToAlpha3 } from './src/data/iso3166.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
 import { parseSilenceTimeoutEnv } from './src/data/aisWatchdog.js';
@@ -2151,6 +2166,247 @@ function gdeltEventsProxy() {
   };
 }
 
+/**
+ * GDELT Event Database 2.0 — "Geopolitical Events" proxy.
+ *
+ * Unlike GEO 2.0 (a queryable REST API — see `gdeltEventsProxy` above), the
+ * real Event Database is published only as bulk 15-minute exports: a plain
+ * text `lastupdate.txt` pointer to a zipped, tab-delimited, headerless,
+ * whole-world CSV. There is no server-side event-type filter upstream.
+ *
+ * ## Rolling buffer, not re-fetched history
+ *
+ * Re-creating the GEO layer's 24h framing here would mean re-downloading up
+ * to 96 export files. Instead this proxy keeps a rolling few-hour buffer:
+ * each poll fetches only the LATEST interval (by comparing against
+ * `lastupdate.txt`), parses+filters it down to the CAMEO root codes any
+ * preset cares about, and appends it to an in-memory + disk-persisted
+ * buffer, evicting entries older than `BUFFER_WINDOW_MS`. A cold start
+ * (empty buffer) backfills a handful of recent intervals by walking
+ * `lastupdate.txt`'s timestamp backward, not the full window at once.
+ *
+ * ## The request surface is closed
+ *
+ * Same discipline as GEO 2.0: `?preset=<id>` only, resolved against the
+ * fixed `CAMEO_PRESETS` table. No caller text ever reaches GDELT.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function gdeltCameoEventsProxy() {
+  /** Rolling coverage window — deliberately not 24h; see module doc above. */
+  const BUFFER_WINDOW_MS = 3 * 60 * 60 * 1000;
+  /** Cold-start backfill depth (6 × 15 min = 90 min), not the full window at once. */
+  const BACKFILL_INTERVALS = 6;
+  /** Don't re-check lastupdate.txt more often than this. */
+  const POLL_STALE_MS = 7 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
+  const LASTUPDATE_MAX_BYTES = 8 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'gdelt-cameo');
+  const BUFFER_DISK_PATH = path.join(CACHE_DIR, 'buffer.json');
+  const ATTRIBUTION = 'The GDELT Project — Event Database 2.0';
+
+  /** @type {Array<{intervalId: string, intervalMs: number, records: Array<object>}>} */
+  let buffer = [];
+  let bufferLoaded = false;
+  let lastPolledAt = 0;
+  const inFlight = new Map();
+
+  async function loadDiskBuffer() {
+    if (bufferLoaded) return;
+    bufferLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(BUFFER_DISK_PATH, 'utf8'));
+      if (Array.isArray(parsed)) buffer = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskBuffer() {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(BUFFER_DISK_PATH, JSON.stringify(buffer), 'utf8');
+    } catch (error) {
+      console.warn(`[gdelt-cameo-proxy] buffer write failed: ${error?.message || error}`);
+    }
+  }
+
+  /** Same capped-read discipline as readResponseTextCapped, for a binary (ZIP) body. */
+  async function readResponseBufferCapped(response, maxBytes) {
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      const err = new Error('Upstream response too large');
+      err.code = 'RESPONSE_TOO_LARGE';
+      throw err;
+    }
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.byteLength > maxBytes) {
+        const err = new Error('Upstream response too large');
+        err.code = 'RESPONSE_TOO_LARGE';
+        throw err;
+      }
+      return buf;
+    }
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* no-op */ }
+        const err = new Error('Upstream response too large');
+        err.code = 'RESPONSE_TOO_LARGE';
+        throw err;
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /** Fetch, unzip, and parse one 15-minute interval's export file. */
+  async function fetchIntervalRecords(intervalId) {
+    const upstream = await fetch(exportUrlForInterval(intervalId), { signal: AbortSignal.timeout(25000) });
+    const zipBuffer = await readResponseBufferCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const unzipped = unzipSync(new Uint8Array(zipBuffer));
+    const [filename] = Object.keys(unzipped);
+    if (!filename) return [];
+    return parseCameoExport(strFromU8(unzipped[filename]));
+  }
+
+  /** Poll lastupdate.txt; append any new interval(s) to the buffer, evict stale ones. */
+  async function refreshBuffer() {
+    await loadDiskBuffer();
+    const lastUpdateRes = await fetch('https://data.gdeltproject.org/gdeltv2/lastupdate.txt', {
+      signal: AbortSignal.timeout(15000),
+    });
+    const lastUpdateText = await readResponseTextCapped(lastUpdateRes, LASTUPDATE_MAX_BYTES);
+    if (!lastUpdateRes.ok) {
+      const error = new Error(`lastupdate.txt HTTP ${lastUpdateRes.status}`);
+      error.upstreamStatus = lastUpdateRes.status;
+      throw error;
+    }
+    const pointer = parseLastUpdateText(lastUpdateText);
+    if (!pointer) throw new Error('lastupdate.txt did not name an export file');
+
+    const haveIds = new Set(buffer.map((entry) => entry.intervalId));
+    const idsToFetch = [];
+    if (buffer.length === 0) {
+      // Cold start: backfill a handful of recent intervals, not the whole window.
+      let cursor = pointer.intervalId;
+      for (let i = 0; i < BACKFILL_INTERVALS && cursor; i += 1) {
+        idsToFetch.unshift(cursor);
+        cursor = previousIntervalId(cursor);
+      }
+    } else if (!haveIds.has(pointer.intervalId)) {
+      idsToFetch.push(pointer.intervalId);
+    }
+
+    for (const intervalId of idsToFetch) {
+      if (haveIds.has(intervalId)) continue;
+      const intervalMs = parseIntervalId(intervalId);
+      if (!Number.isFinite(intervalMs)) continue;
+      try {
+        const records = await fetchIntervalRecords(intervalId);
+        buffer.push({ intervalId, intervalMs, records });
+        haveIds.add(intervalId);
+      } catch (error) {
+        // One bad interval (upstream hiccup, a truncated export) does not
+        // sink the whole poll — the buffer just stays a little thinner.
+        console.warn(`[gdelt-cameo-proxy] interval ${intervalId} fetch failed: ${error?.message || error}`);
+      }
+    }
+    buffer = pruneStaleIntervals(buffer, Date.now(), BUFFER_WINDOW_MS);
+    buffer.sort((a, b) => a.intervalMs - b.intervalMs);
+    void saveDiskBuffer();
+    return buffer;
+  }
+
+  /** Refresh at most once per POLL_STALE_MS; a failure keeps serving the existing buffer. */
+  async function ensureFreshBuffer() {
+    await loadDiskBuffer();
+    if (buffer.length > 0 && Date.now() - lastPolledAt < POLL_STALE_MS) return buffer;
+    const request = coalesceProxyRequest(inFlight, 'refresh', refreshBuffer);
+    try {
+      const result = await request.promise;
+      lastPolledAt = Date.now();
+      return result;
+    } catch (error) {
+      lastPolledAt = Date.now(); // don't hammer upstream on repeated failure
+      if (buffer.length === 0) throw error; // nothing to serve — surface the failure
+      if (!request.shared) {
+        console.warn(`[gdelt-cameo-proxy] refresh failed (${error?.message || error}) — serving existing buffer`);
+      }
+      return buffer;
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=180' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/gdelt/cameo-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveCameoPreset(requested);
+      if (!preset) {
+        send(res, 400, JSON.stringify({ error: 'Unknown event preset' }), 'NONE');
+        return;
+      }
+
+      try {
+        const currentBuffer = await ensureFreshBuffer();
+        const merged = mergeIntervalRecords(currentBuffer);
+        const sliced = sliceRecordsForPreset(merged, preset.id, { maxRecords: 750 });
+        const intervalTimes = currentBuffer.map((entry) => entry.intervalMs).filter(Number.isFinite);
+        const oldestMs = intervalTimes.length ? Math.min(...intervalTimes) : null;
+        const newestMs = intervalTimes.length ? Math.max(...intervalTimes) : null;
+        const warming = Boolean(oldestMs !== null && newestMs !== null && (newestMs - oldestMs) < BUFFER_WINDOW_MS * 0.5);
+        const body = JSON.stringify({
+          preset: preset.id,
+          label: preset.label,
+          records: sliced.records,
+          truncated: sliced.truncated,
+          totalFeatures: sliced.totalFeatures,
+          warming,
+          bufferWindowMs: BUFFER_WINDOW_MS,
+          oldestBufferedMs: oldestMs,
+          attribution: ATTRIBUTION,
+          fetchedAt: Date.now(),
+        });
+        send(res, 200, body, 'HIT');
+      } catch (error) {
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'GDELT Event Database unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'gdelt-cameo-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
 
 /**
  * NOAA SWPC space-weather proxy — aurora forecast and geomagnetic state.
@@ -3784,6 +4040,180 @@ function vesselEventsProxy() {
 
   return {
     name: 'vessel-events-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * ACLED (Armed Conflict Location & Event Data Project) events proxy.
+ *
+ * Optional, bring-your-own-key, same shape as `vesselEventsProxy` above:
+ * the middleware is always registered, and a missing credential answers
+ * 503 `{error:'no_key'}` per request rather than refusing to install at all.
+ *
+ * ## Credentials
+ *
+ * ACLED requires BOTH a registered API key and the account's registered
+ * email as query parameters (`ACLED_API_KEY` + `ACLED_API_EMAIL`) — not a
+ * single bearer token like GFW. Register at https://acleddata.com/register.
+ *
+ * ## A note on the exact query surface
+ *
+ * ACLED's API has changed shape over time and this project could not
+ * exercise it against a live account while building this proxy (no network
+ * path to acleddata.com from the build environment). `event_type` filtering
+ * is corroborated across ACLED's own docs and multiple third-party clients
+ * and is the one filter this proxy relies on; deliberately NOT relied on
+ * here is any exact date-range parameter name, since sources disagree on
+ * its current shape — recency is instead enforced client-side by
+ * `normalizeAcledEvents`' own sort+cap. If ACLED's endpoint path or
+ * response envelope has moved since, `refreshUpstream` below is the only
+ * place that needs to change.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function acledEventsProxy() {
+  // ACLED's own coding pipeline updates on a roughly weekly cadence; a short
+  // TTL would only spend the caller's registered-account quota re-fetching
+  // the same rows.
+  const TTL_MS = 30 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+  const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'acled');
+  const BASE_URL = 'https://acleddata.com/api/acled/read';
+  const ATTRIBUTION = 'ACLED — acleddata.com (non-commercial use only)';
+  /** Recency window this proxy claims to the client — enforced client-side; see module doc. */
+  const WINDOW_DAYS = 30;
+
+  /** @type {Map<string, {at:number, body:string}>} */
+  const cache = new Map();
+  const inFlight = new Map();
+
+  const hasCredentials = () => Boolean(process.env.ACLED_API_KEY) && Boolean(process.env.ACLED_API_EMAIL);
+
+  const diskPath = (presetId) => path.join(CACHE_DIR, `events-${presetId}.json`);
+
+  async function loadDiskCache(presetId) {
+    if (cache.has(presetId)) return;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(diskPath(presetId), 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache.set(presetId, parsed);
+    } catch { /* first run for this preset */ }
+  }
+
+  async function saveDiskCache(presetId, entry) {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      await fsp.writeFile(diskPath(presetId), JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[acled-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=600' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream(preset) {
+    const url = new URL(BASE_URL);
+    url.searchParams.set('key', process.env.ACLED_API_KEY);
+    url.searchParams.set('email', process.env.ACLED_API_EMAIL);
+    url.searchParams.set('event_type', preset.eventType);
+    url.searchParams.set('limit', '1000');
+
+    const upstream = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error('upstream returned a non-JSON body (likely a rejected request)');
+    }
+    if (parsed?.success === false) {
+      throw new Error(String(parsed?.error?.[0]?.message || parsed?.error || 'ACLED rejected the request'));
+    }
+    const normalized = normalizeAcledEvents(parsed, preset);
+    const body = JSON.stringify({
+      preset: preset.id,
+      label: preset.label,
+      events: normalized.events,
+      truncated: normalized.truncated,
+      total: normalized.total,
+      windowDays: WINDOW_DAYS,
+      attribution: ATTRIBUTION,
+      fetchedAt: Date.now(),
+    });
+    const fresh = { at: Date.now(), body };
+    cache.set(preset.id, fresh);
+    void saveDiskCache(preset.id, fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    // Registered FIRST — see the same ordering note on /api/vessel-events/status above.
+    middlewares.use('/api/acled-events/status', (req, res) => {
+      send(res, 200, JSON.stringify({ hasKey: hasCredentials() }), 'NONE');
+    });
+
+    middlewares.use('/api/acled-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const requested = new URL(req.url || '', 'http://localhost').searchParams.get('preset');
+      const preset = resolveAcledPreset(requested);
+      if (!preset) {
+        send(res, 400, JSON.stringify({ error: 'Unknown ACLED event preset' }), 'NONE');
+        return;
+      }
+      if (!hasCredentials()) {
+        // Answered without touching upstream, so a keyless install costs
+        // ACLED nothing and the poll stays cheap.
+        send(res, 503, JSON.stringify({ error: 'no_key' }), 'NONE');
+        return;
+      }
+
+      await loadDiskCache(preset.id);
+      const cached = cache.get(preset.id);
+      if (cached && Date.now() - cached.at < TTL_MS) {
+        send(res, 200, cached.body, 'HIT');
+        return;
+      }
+      const stale = cached;
+      const request = coalesceProxyRequest(inFlight, `acled:${preset.id}`, () => refreshUpstream(preset));
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[acled-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'ACLED unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'acled-events-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9510,6 +9940,12 @@ const REGIONAL_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const _regionalBriefCache = new Map();
 const _regionalBriefInFlight = new Map();
 const _regionalBriefRateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30, globalMax: 90 });
+// ReliefWeb reports change on a humanitarian-response cadence, not a news
+// cadence — a longer, country-keyed cache nested inside the regional-brief
+// cache, so a busy news minute does not re-hit ReliefWeb for the same country.
+const RELIEFWEB_CACHE_MS = 30 * 60_000;
+const _reliefWebCache = new Map();
+const _reliefWebInFlight = new Map();
 const WEATHER_EFFECTS_CACHE_MS = 5 * 60_000;
 const WEATHER_EFFECTS_STALE_MS = 30 * 60_000;
 const WEATHER_EFFECTS_MAX_CACHE = 180;
@@ -9684,6 +10120,56 @@ async function fetchRegionalNews(place) {
   }
 }
 
+/**
+ * Humanitarian-response context for the resolved place's country, from
+ * ReliefWeb (UN OCHA) — country-level, no key required.
+ *
+ * Independently optional: this function never throws, so a ReliefWeb outage
+ * degrades only its own `humanitarian` field in the regional-brief payload,
+ * exactly the same discipline `mergeSpaceWeatherPayload` uses for its
+ * DONKI/NeoWs fields — absence is `{status:'unavailable', reports:[]}`,
+ * never a rejection that blanks the place/weather/news fields too.
+ *
+ * @param {object|null} place Resolved `normalizeRegionalPlace` output.
+ * @returns {Promise<{status: string, reports: Array<object>}>}
+ */
+async function fetchReliefWebReports(place) {
+  const iso3 = alpha2ToAlpha3(place?.countryCode);
+  if (!iso3) return { status: 'unavailable', reports: [] };
+
+  const cached = _reliefWebCache.get(iso3);
+  if (cached && Date.now() - cached.at < RELIEFWEB_CACHE_MS) {
+    return { status: cached.reports.length ? 'ready' : 'empty', reports: cached.reports };
+  }
+
+  const request = coalesceProxyRequest(_reliefWebInFlight, iso3, async () => {
+    const params = new URLSearchParams({
+      appname: 'gods-eye-view',
+      'filter[field]': 'country.iso3',
+      'filter[value]': iso3,
+      limit: '5',
+    });
+    params.append('sort[]', 'date:desc');
+    params.append('fields[include][]', 'title');
+    params.append('fields[include][]', 'url');
+    params.append('fields[include][]', 'date');
+    const payload = await fetchRegionalJson(`https://api.reliefweb.int/v1/reports?${params}`, { timeoutMs: 9000 });
+    const reports = normalizeReliefWebReports(payload);
+    _reliefWebCache.set(iso3, { at: Date.now(), reports });
+    return reports;
+  });
+
+  try {
+    const reports = await request.promise;
+    return { status: reports.length ? 'ready' : 'empty', reports };
+  } catch {
+    // A stale country-level cache is still useful humanitarian context; an
+    // outright miss degrades to "unavailable", never to a thrown rejection.
+    if (cached) return { status: 'stale', reports: cached.reports };
+    return { status: 'unavailable', reports: [] };
+  }
+}
+
 async function fetchRegionalWeather(point) {
   const params = new URLSearchParams({
     latitude: point.latitude.toFixed(5),
@@ -9714,7 +10200,13 @@ function regionalBriefProxy() {
     ]);
     const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
     const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
-    const news = await fetchRegionalNews(place);
+    // Both depend on the resolved place, not on each other — fetched
+    // concurrently. Neither throws, so a ReliefWeb outage cannot blank news
+    // (or vice versa); see fetchReliefWebReports's own doc.
+    const [news, humanitarian] = await Promise.all([
+      fetchRegionalNews(place),
+      fetchReliefWebReports(place),
+    ]);
     if (!regionalBriefHasAnySource({ place, weather, news })) {
       throw new Error('All regional briefing sources unavailable');
     }
@@ -9730,6 +10222,8 @@ function regionalBriefProxy() {
       newsQuery: news.query,
       newsSource: news.source,
       articles: news.articles,
+      humanitarianStatus: humanitarian.status,
+      humanitarianReports: humanitarian.reports,
     };
     _regionalBriefCache.set(key, { payload, cachedAt: Date.now() });
     trimRegionalBriefCache();
@@ -9954,6 +10448,7 @@ export default defineConfig(({ mode }) => {
       firmsProxy(),
       firePerimetersProxy(),
       gdeltEventsProxy(),
+      gdeltCameoEventsProxy(),
       spaceWeatherProxy(),
       globalHazardsProxy(),
       volcanoesProxy(),
@@ -9964,6 +10459,7 @@ export default defineConfig(({ mode }) => {
       internetOutagesProxy(),
       noaaWeatherProxy(),
       vesselEventsProxy(),
+      acledEventsProxy(),
       copernicusImageryProxy(),
       rocketLaunchesProxy(),
       terrainHeightsProxy(),
