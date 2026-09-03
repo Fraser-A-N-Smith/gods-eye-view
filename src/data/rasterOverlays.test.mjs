@@ -48,11 +48,14 @@ function harness({ globeShow = true } = {}) {
 }
 
 const seamarks = RASTER_OVERLAYS[0];
+const HOBBY_SERVER_OVERLAY_IDS = ['openseamap-seamarks', 'opensnowmap-pistes', 'openrailwaymap-tracks'];
 
-test('all three overlays ship, with distinct ids and tokens', () => {
-  assert.equal(RASTER_OVERLAYS.length, 3);
-  assert.deepEqual(RASTER_OVERLAY_IDS, ['openseamap-seamarks', 'opensnowmap-pistes', 'openrailwaymap-tracks']);
-  assert.equal(new Set(RASTER_OVERLAYS.map((o) => o.token)).size, 3);
+test('all four overlays ship, with distinct ids and tokens', () => {
+  assert.equal(RASTER_OVERLAYS.length, 4);
+  assert.deepEqual(RASTER_OVERLAY_IDS, [
+    'openseamap-seamarks', 'opensnowmap-pistes', 'openrailwaymap-tracks', 'reference-boundaries-labels',
+  ]);
+  assert.equal(new Set(RASTER_OVERLAYS.map((o) => o.token)).size, 4);
 });
 
 test('every overlay carries ODbL attribution and a zoom range', () => {
@@ -65,13 +68,21 @@ test('every overlay carries ODbL attribution and a zoom range', () => {
   }
 });
 
-test('POLITENESS: zoom is bounded so panning cannot 404-storm a hobby server', () => {
-  // Neither source renders tiles across the whole zoom range; requesting the
-  // empty ends is pure noise against a volunteer-run server.
-  for (const overlay of RASTER_OVERLAYS) {
+test('POLITENESS: hobby-server overlays are zoom-bounded so panning cannot 404-storm them', () => {
+  // These three sources don't render tiles across the whole zoom range, and
+  // run on volunteer infrastructure; requesting the empty ends is pure noise.
+  for (const overlay of RASTER_OVERLAYS.filter((o) => HOBBY_SERVER_OVERLAY_IDS.includes(o.id))) {
     assert.ok(overlay.minimumLevel >= 8, `${overlay.id} should not request world-scale tiles`);
     assert.ok(overlay.maximumLevel <= 19, `${overlay.id} should not request past what exists`);
   }
+});
+
+test('the CARTO reference layer is deliberately visible zoomed all the way out', () => {
+  // Country outlines and place names are exactly what you want at world
+  // scale, and CARTO's CDN (unlike the hobby servers above) is built for it.
+  const reference = RASTER_OVERLAYS.find((o) => o.id === 'reference-boundaries-labels');
+  assert.equal(reference.minimumLevel, 0);
+  assert.ok(reference.maximumLevel <= 19);
 });
 
 test('globe visibility is read from live scene state', () => {
@@ -212,7 +223,7 @@ test('update is a no-op that only re-reads visibility — nothing to poll', asyn
   assert.equal(layer.updateInterval, 0, 'static cartography is not polled');
 });
 
-test('the layers deliberately do NOT implement replay suppression', async () => {
+test('the shipped layers deliberately do NOT implement replay suppression', async () => {
   // These are cartography, not observations: a lighthouse was in the same
   // place four minutes ago. Hiding them during replay would remove context
   // without removing any false claim.
@@ -224,7 +235,7 @@ test('the layers deliberately do NOT implement replay suppression', async () => 
 
 test('the shipped layers expose the standard lifecycle', async () => {
   const layers = (await import('./rasterOverlays.js')).default;
-  assert.equal(layers.length, 3);
+  assert.equal(layers.length, 4);
   for (const layer of layers) {
     for (const method of ['init', 'enable', 'disable', 'update', 'destroy', 'getStats']) {
       assert.equal(typeof layer[method], 'function', `${layer.id}.${method}`);
