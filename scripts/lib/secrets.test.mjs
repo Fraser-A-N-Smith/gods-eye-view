@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import {
   parseDotEnv,
   readDotEnv,
@@ -19,6 +20,7 @@ import {
   repoRootFrom,
   OPENSKY_AUTH_MODES,
   KEYCHAIN_LOOKUPS,
+  OPTIONAL_SECRET_NAMES,
 } from './secrets.mjs';
 
 /** A `security` stand-in that answers from a table and records its calls. */
@@ -271,4 +273,35 @@ test('REPO_ROOT is a constant, so it cannot be resolved from the wrong depth', (
   assert.equal(path.basename(REPO_ROOT), 'gods-eye-view');
   assert.equal(repoRootFrom('file:///a/b/c/scripts/tool.mjs', 1), path.resolve('/a/b/c'));
   assert.equal(repoRootFrom('file:///a/b/c/scripts/lib/tool.mjs', 2), path.resolve('/a/b/c'));
+});
+
+test('every forwarded optional key matches a name vite.config.js actually reads', () => {
+  // The bug this catches: the launcher forwarded FIRMS_API_KEY while the proxy
+  // read FIRMS_MAP_KEY. Nothing broke loudly — Vite's own loadEnv still found
+  // the real name in .env — so the only symptom was the launcher's "Optional
+  // keys" line never reporting FIRMS as configured, which reads as "my key
+  // isn't working". A near-miss here is silent by construction, so it needs a
+  // test rather than review.
+  // Both forms count: server-side proxies read `process.env.X`, while keys the
+  // client needs are read off the merged `env` object in the define block.
+  const config = readFileSync(new URL('../../vite.config.js', import.meta.url), 'utf8');
+  const readByConfig = new Set(
+    [...config.matchAll(/(?:process\.)?env\.([A-Z][A-Z0-9_]*)/g)].map((match) => match[1]),
+  );
+  for (const name of OPTIONAL_SECRET_NAMES) {
+    assert.ok(
+      readByConfig.has(name),
+      `${name} is forwarded by the launcher but never read in vite.config.js`,
+    );
+  }
+});
+
+test('the keychain lookup table also names only real variables', () => {
+  const config = readFileSync(new URL('../../vite.config.js', import.meta.url), 'utf8');
+  const readByConfig = new Set(
+    [...config.matchAll(/(?:process\.)?env\.([A-Z][A-Z0-9_]*)/g)].map((match) => match[1]),
+  );
+  for (const name of Object.keys(KEYCHAIN_LOOKUPS)) {
+    assert.ok(readByConfig.has(name), `${name} has a keychain lookup but is never read`);
+  }
 });

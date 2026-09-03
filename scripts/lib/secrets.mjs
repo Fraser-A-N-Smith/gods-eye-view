@@ -168,14 +168,26 @@ export const KEYCHAIN_LOOKUPS = Object.freeze({
   ],
 });
 
-/** Optional secrets the launcher forwards when it can find them. */
+/**
+ * Optional secrets the launcher forwards when it can find them.
+ *
+ * Every name here must match the variable the corresponding proxy actually
+ * reads in vite.config.js. A near-miss does not fail loudly — Vite's own
+ * loadEnv still picks the real name up out of .env, so the feature keeps
+ * working while the launcher's "Optional keys" line silently never reports it.
+ * `secrets.test.mjs` pins these against vite.config.js so the drift is caught.
+ */
 export const OPTIONAL_SECRET_NAMES = Object.freeze([
   'CESIUM_ION_TOKEN',
   'OPENAI_API_KEY',
   'AISSTREAM_API_KEY',
-  'FIRMS_API_KEY',
+  'FIRMS_MAP_KEY',
   'TOMTOM_API_KEY',
   'LL2_API_TOKEN',
+  'COPERNICUS_CLIENT_ID',
+  'COPERNICUS_CLIENT_SECRET',
+  'COPERNICUS_INSTANCE_ID',
+  'GFW_API_TOKEN',
 ]);
 
 /** Valid OpenSky auth modes. */
