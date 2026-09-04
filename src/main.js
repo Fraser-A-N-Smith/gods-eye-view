@@ -31,6 +31,7 @@ import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
 import criticalInfrastructureLayer from './data/criticalInfrastructure.js';
+import deforestationAlertsLayer from './data/deforestationAlerts.js';
 import localDataLayers from './data/localLayers.js';
 import { LAYER_STATE_REGISTRY } from './data/layerState.js';
 import { registerDataCredits } from './data/dataCredits.js';
@@ -324,6 +325,7 @@ async function init() {
     dataManager.register(militaryAwarenessLayer);
     militaryAwarenessLayer.attachDataManager(dataManager);
     dataManager.register(criticalInfrastructureLayer);
+    dataManager.register(deforestationAlertsLayer);
     for (const layer of localDataLayers) {
       dataManager.register(layer);
     }

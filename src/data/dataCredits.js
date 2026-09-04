@@ -134,6 +134,13 @@ export const DATA_CREDITS = [
       '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
   },
   {
+    key: 'gfw-forest',
+    html:
+      'Deforestation alerts: ' +
+      '<a href="https://www.globalforestwatch.org" target="_blank" rel="noopener">Global Forest Watch</a> ' +
+      '(World Resources Institute / NASA GLAD)',
+  },
+  {
     key: 'who-don',
     html:
       'Disease outbreak notices: ' +

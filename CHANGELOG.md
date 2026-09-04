@@ -3,6 +3,28 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-08-31 (g)
+
+### Added
+
+- Added a **Deforestation Alerts** layer (Global Forest Watch GLAD-L/Landsat
+  tree-cover-loss detections), viewport-bounded like Critical Infrastructure
+  — global alert volume is far too dense to preload. Age-tinted points
+  (red at 30 days, fading to gray past 180). Requires a free registered
+  `FOREST_WATCH_API_TOKEN` — deliberately a different variable from
+  `GFW_API_TOKEN` (Global Fishing Watch), so the two unrelated "GFW"
+  services' tokens can never cross-wire. Without a token the layer reads
+  `KEY REQUIRED`. ⚠️ GFW's Data API query mechanism and this dataset's
+  column names are a best-effort mapping pending live-schema verification.
+- This is the first layer to use a multi-character share-link token
+  (`da`) — single-char tokens (a-z0-9) ran out at 35 registered layers.
+  See the `validateLayerStateRegistry` note in `layerState.js`: tokens
+  are `.`-joined in the encoded string, so widening the format was a
+  capacity increase with no effect on existing share links. Also fixed
+  an undersized `MAX_ENABLED_LAYERS_CHARS` (64, raised to 320) that was
+  already silently rejecting a share link with every layer enabled
+  before this change.
+
 ## [Unreleased] — 2026-08-31 (f)
 
 ### Added

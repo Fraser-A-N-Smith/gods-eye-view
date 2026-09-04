@@ -288,6 +288,7 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'border-wait-times', token: '6', disposition: 'enabled-only' }),
   Object.freeze({ id: 'cctv', token: 'c', disposition: 'enabled+options', optionOwner: 'cctv' }),
   Object.freeze({ id: 'critical-infrastructure', token: '5', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'deforestation-alerts', token: 'da', disposition: 'enabled-only' }),
   Object.freeze({ id: 'disease-outbreaks', token: '9', disposition: 'enabled-only' }),
   Object.freeze({ id: 'earthquakes', token: 'e', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fire-perimeters', token: 'p', disposition: 'enabled-only' }),

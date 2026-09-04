@@ -212,6 +212,7 @@ Twenty-three live layers. **Nineteen of them need nothing at all** — no key, n
 | ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
 | 🦠 **Disease Outbreaks** | Global health-emergency notices, placed at each notice's reporting country | WHO Disease Outbreak News | 🟢 |
+| 🪓 **Deforestation Alerts** | Viewport-bounded GLAD-L (Landsat) tree-cover-loss detections, age-tinted | Global Forest Watch | 🟡 |
 
 **Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The two raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
 

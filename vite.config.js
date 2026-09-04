@@ -46,6 +46,7 @@ import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
 import { mapVolcanoFeature, mapVolcanoNotice, mergeVolcanoAlerts } from './src/data/volcanoesShape.js';
 import { mapDiseaseOutbreakFeed } from './src/data/diseaseOutbreaksShape.js';
+import { mapGfwAlertFeed } from './src/data/deforestationAlertsShape.js';
 import { parseNdbcText, mapCoOpsStation } from './src/data/oceanBuoysShape.js';
 import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
@@ -9424,6 +9425,182 @@ function criticalInfrastructureProxy() {
   };
 }
 
+/**
+ * Deforestation Alerts proxy — Global Forest Watch GLAD-L (Landsat)
+ * tree-cover-loss detections.
+ *
+ * BYOK: Global Forest Watch's Data API requires a free registered token
+ * (`FOREST_WATCH_API_TOKEN` — deliberately NOT `GFW_API_TOKEN`, which this
+ * app already uses for the unrelated Global Fishing Watch vessel-events
+ * layer; both services go by "GFW" but issue separate tokens for separate
+ * APIs, and this app must never let one token silently double as the
+ * other's). Without one, every request returns 503 `{error: 'no_key'}`
+ * before ever touching upstream — same shape as `firmsProxy`.
+ *
+ * VIEWPORT-BOUNDED, same reasoning as `criticalInfrastructureProxy`: global
+ * alert volume is far too dense to preload. The requested bbox is snapped
+ * outward onto a 1° cache grid so neighbouring viewports share one entry;
+ * the client (`deforestationAlerts.js`) trims the returned superset back
+ * down to the exact requested viewport.
+ *
+ * ⚠️ GFW's Data API query mechanism (a SQL-like `?sql=` query against its
+ * REST query endpoint) and this dataset's exact column names could not be
+ * verified against a live response while building this (sandboxed network
+ * access) — `mapGfwAlertFeed` (see `deforestationAlertsShape.js`) tolerates
+ * several candidate column spellings and degrades to zero alerts rather
+ * than a crash on a schema or endpoint mismatch.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function deforestationAlertsProxy() {
+  const TTL_MS = 15 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const MAX_ALERTS = 1500;
+  const MAX_CACHE_ENTRIES = 500;
+  const BBOX_STEP_DEG = 1;
+  const DATASET = 'umd_glad_landsat_alerts';
+  const GFW_QUERY_URL = `https://data-api.globalforestwatch.org/dataset/${DATASET}/latest/query`;
+  const ATTRIBUTION = 'Global Forest Watch (World Resources Institute / NASA GLAD)';
+
+  const cache = new Map();
+  const inFlight = new Map();
+  const rateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30, globalMax: 90 });
+
+  function validBox(params) {
+    const south = requiredFiniteQueryNumber(params, 'south');
+    const west = requiredFiniteQueryNumber(params, 'west');
+    const north = requiredFiniteQueryNumber(params, 'north');
+    const east = requiredFiniteQueryNumber(params, 'east');
+    if (![south, west, north, east].every(Number.isFinite)) return null;
+    if (south < -90 || north > 90 || west < -180 || east > 180 || south >= north || west >= east) return null;
+    if (north - south > 5 || east - west > 5) return null;
+    return { south, west, north, east };
+  }
+
+  function quantizeBox(box) {
+    const snap = (value, grow) => {
+      const cells = Number((value / BBOX_STEP_DEG).toFixed(9));
+      return Number(((grow > 0 ? Math.ceil(cells) : Math.floor(cells)) * BBOX_STEP_DEG).toFixed(6));
+    };
+    return {
+      south: Math.max(-90, snap(box.south, -1)),
+      west: Math.max(-180, snap(box.west, -1)),
+      north: Math.min(90, snap(box.north, 1)),
+      east: Math.min(180, snap(box.east, 1)),
+    };
+  }
+
+  function cacheKey(box) {
+    return [box.south, box.west, box.north, box.east].map((v) => v.toFixed(3)).join(',');
+  }
+
+  function trimCache() {
+    while (cache.size > MAX_CACHE_ENTRIES) {
+      const oldestKey = cache.keys().next().value;
+      cache.delete(oldestKey);
+    }
+  }
+
+  async function refresh(box) {
+    const token = String(process.env.FOREST_WATCH_API_TOKEN || '').trim();
+    // Trailing-year window keeps the query bounded — GLAD-L alerts older
+    // than a year are of little operational interest for a live map.
+    const sinceDate = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+    const sql = `SELECT latitude, longitude, ${DATASET}__date, ${DATASET}__confidence `
+      + `FROM data WHERE ${DATASET}__date > '${sinceDate}' `
+      + `AND latitude BETWEEN ${box.south} AND ${box.north} `
+      + `AND longitude BETWEEN ${box.west} AND ${box.east} `
+      + `ORDER BY ${DATASET}__date DESC LIMIT ${MAX_ALERTS}`;
+    const upstream = await fetch(`${GFW_QUERY_URL}?sql=${encodeURIComponent(sql)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(20000),
+    });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const alerts = mapGfwAlertFeed(parsed, MAX_ALERTS);
+    return {
+      alerts,
+      truncated: alerts.length >= MAX_ALERTS,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    };
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/deforestation-alerts', async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      const token = String(process.env.FOREST_WATCH_API_TOKEN || '').trim();
+      if (!token) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no_key' }));
+        return;
+      }
+      if (!rateLimiter(clientKey(req))) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '10' });
+        res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
+        return;
+      }
+      const url = new URL(req.url || '', 'http://localhost');
+      const requested = validBox(url.searchParams);
+      if (!requested) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'A non-dateline bbox no larger than 5 degrees is required' }));
+        return;
+      }
+      const box = quantizeBox(requested);
+      const key = cacheKey(box);
+      const now = Date.now();
+      const cached = cache.get(key);
+      if (cached && now - cached.at < TTL_MS) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60', 'X-GEV-Cache': 'HIT' });
+        res.end(JSON.stringify(cached.payload));
+        return;
+      }
+      const request = coalesceProxyRequest(inFlight, key, () => refresh(box));
+      try {
+        const payload = await request.promise;
+        cache.set(key, { payload, at: Date.now() });
+        trimCache();
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=60',
+          'X-GEV-Cache': request.shared ? 'INFLIGHT' : 'MISS',
+        });
+        res.end(JSON.stringify(payload));
+      } catch (error) {
+        if (cached) {
+          if (!request.shared) {
+            console.warn(`[deforestation-alerts-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-GEV-Cache': 'STALE-ERROR' });
+          res.end(JSON.stringify(cached.payload));
+          return;
+        }
+        res.writeHead(
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          { 'Content-Type': 'application/json' },
+        );
+        res.end(JSON.stringify({ error: 'Deforestation alerts unavailable' }));
+      }
+    });
+  }
+
+  return {
+    name: 'deforestation-alerts-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Regional cockpit briefing proxy
 // ---------------------------------------------------------------------------
@@ -9942,6 +10119,7 @@ export default defineConfig(({ mode }) => {
       overpassProxy(),
       militaryInstallationsProxy(),
       criticalInfrastructureProxy(),
+      deforestationAlertsProxy(),
       regionalBriefProxy(),
       weatherEffectsProxy(),
       cctvProxy(),
