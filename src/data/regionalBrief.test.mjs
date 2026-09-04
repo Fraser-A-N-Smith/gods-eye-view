@@ -5,6 +5,9 @@ import {
   normalizeRegionalPlace,
   normalizeRegionalWeather,
   normalizeReliefWebReports,
+  normalizeRegionalAirQuality,
+  normalizeRegionalFlood,
+  airQualityLabel,
   regionalDistanceM,
   weatherCodeLabel,
 } from './regionalBrief.js';
@@ -73,6 +76,35 @@ test('an empty or malformed ReliefWeb payload yields an empty array, never undef
   for (const input of [null, {}, { data: null }, { data: [] }]) {
     assert.deepEqual(normalizeReliefWebReports(input), []);
   }
+});
+
+test('normalizes air quality and rejects an all-null payload', () => {
+  const aq = normalizeRegionalAirQuality({ current: {
+    time: '2026-08-17T00:15:00Z', us_aqi: 42, pm2_5: 8.1, pm10: 15.6,
+  } });
+  assert.equal(aq.usAqi, 42);
+  assert.equal(aq.pm2_5, 8.1);
+  assert.equal(airQualityLabel(aq.usAqi), 'GOOD');
+  assert.equal(normalizeRegionalAirQuality({ current: {} }), null);
+  assert.equal(normalizeRegionalAirQuality({}), null);
+});
+
+test('air quality label buckets across the EPA scale', () => {
+  assert.equal(airQualityLabel(30), 'GOOD');
+  assert.equal(airQualityLabel(75), 'MODERATE');
+  assert.equal(airQualityLabel(120), 'UNHEALTHY (SENSITIVE)');
+  assert.equal(airQualityLabel(180), 'UNHEALTHY');
+  assert.equal(airQualityLabel(250), 'VERY UNHEALTHY');
+  assert.equal(airQualityLabel(400), 'HAZARDOUS');
+  assert.equal(airQualityLabel(null), 'AIR QUALITY UNKNOWN');
+});
+
+test('normalizes river discharge and treats a non-riverine point as absent, not an error', () => {
+  const flood = normalizeRegionalFlood({ daily: { time: ['2026-08-31'], river_discharge: [12.4] } });
+  assert.equal(flood.dischargeCms, 12.4);
+  assert.equal(flood.forecastDate, '2026-08-31T00:00:00Z');
+  assert.equal(normalizeRegionalFlood({ daily: { time: ['2026-08-31'], river_discharge: [null] } }), null);
+  assert.equal(normalizeRegionalFlood({}), null);
 });
 
 test('regional distance handles nearby movement and missing positions', () => {

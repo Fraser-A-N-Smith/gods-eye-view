@@ -11,7 +11,9 @@ import gdeltCameoEventsLayer from './data/gdeltCameoEvents.js';
 import acledEventsLayer from './data/acledEvents.js';
 import globalHazardsLayer from './data/globalHazards.js';
 import volcanoesLayer from './data/volcanoes.js';
+import diseaseOutbreaksLayer from './data/diseaseOutbreaks.js';
 import oceanBuoysLayer from './data/oceanBuoys.js';
+import sondehubLayer from './data/sondehub.js';
 import hamRadioPropagationLayer from './data/hamRadioPropagation.js';
 import borderWaitTimesLayer from './data/borderWaitTimes.js';
 import fireballsLayer from './data/fireballs.js';
@@ -32,6 +34,7 @@ import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
 import criticalInfrastructureLayer from './data/criticalInfrastructure.js';
+import deforestationAlertsLayer from './data/deforestationAlerts.js';
 import localDataLayers from './data/localLayers.js';
 import { LAYER_STATE_REGISTRY } from './data/layerState.js';
 import { registerDataCredits } from './data/dataCredits.js';
@@ -291,7 +294,9 @@ async function init() {
     dataManager.register(gdeltCameoEventsLayer);
     dataManager.register(globalHazardsLayer);
     dataManager.register(volcanoesLayer);
+    dataManager.register(diseaseOutbreaksLayer);
     dataManager.register(oceanBuoysLayer);
+    dataManager.register(sondehubLayer);
     dataManager.register(hamRadioPropagationLayer);
     dataManager.register(borderWaitTimesLayer);
     dataManager.register(fireballsLayer);
@@ -327,6 +332,7 @@ async function init() {
     dataManager.register(militaryAwarenessLayer);
     militaryAwarenessLayer.attachDataManager(dataManager);
     dataManager.register(criticalInfrastructureLayer);
+    dataManager.register(deforestationAlertsLayer);
     for (const layer of localDataLayers) {
       dataManager.register(layer);
     }

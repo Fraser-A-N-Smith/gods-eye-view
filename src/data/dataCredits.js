@@ -73,6 +73,12 @@ export const DATA_CREDITS = [
     html: 'Earthquakes: Data courtesy of the U.S. Geological Survey',
   },
   {
+    key: 'emsc',
+    html:
+      'Supplemental regional earthquake reports: ' +
+      '<a href="https://www.emsc-csem.org" target="_blank" rel="noopener">European-Mediterranean Seismological Centre (EMSC)</a>',
+  },
+  {
     key: 'overpass',
     html:
       'Road geometry (traffic): ' +
@@ -96,9 +102,10 @@ export const DATA_CREDITS = [
   {
     key: 'open-meteo',
     html:
-      'Cockpit current conditions: ' +
+      'Cockpit current conditions, air quality, and river discharge: ' +
       '<a href="https://open-meteo.com/en/licence" target="_blank" rel="noopener">Weather data by Open-Meteo.com</a> ' +
-      '(CC BY 4.0)',
+      '(CC BY 4.0; air quality from Copernicus CAMS, river discharge from Copernicus GloFAS, ' +
+      'both served through Open-Meteo)',
   },
   {
     key: 'google-news-rss',
@@ -147,11 +154,45 @@ export const DATA_CREDITS = [
       '<a href="https://volcano.si.edu" target="_blank" rel="noopener">volcano.si.edu</a>',
   },
   {
+    key: 'gfw-forest',
+    html:
+      'Deforestation alerts: ' +
+      '<a href="https://www.globalforestwatch.org" target="_blank" rel="noopener">Global Forest Watch</a> ' +
+      '(World Resources Institute / NASA GLAD)',
+  },
+  {
+    key: 'who-don',
+    html:
+      'Disease outbreak notices: ' +
+      '<a href="https://www.who.int/emergencies/disease-outbreak-news" target="_blank" rel="noopener">World Health Organization — Disease Outbreak News</a>',
+  },
+  {
+    key: 'usgs-vns',
+    html:
+      'Live US volcano alert status: ' +
+      '<a href="https://volcanoes.usgs.gov/vns2/" target="_blank" rel="noopener">USGS Volcano Notification Service</a> ' +
+      '(US public domain)',
+  },
+  {
     key: 'ndbc',
     html:
       'Ocean buoy observations: NOAA National Data Buoy Center — ' +
       '<a href="https://www.ndbc.noaa.gov" target="_blank" rel="noopener">ndbc.noaa.gov</a> ' +
       '(US public domain)',
+  },
+  {
+    key: 'co-ops',
+    html:
+      'Tide station water levels (curated major US harbors): NOAA CO-OPS — ' +
+      '<a href="https://tidesandcurrents.noaa.gov" target="_blank" rel="noopener">tidesandcurrents.noaa.gov</a> ' +
+      '(US public domain)',
+  },
+  {
+    key: 'sondehub',
+    html:
+      'Radiosonde (weather balloon) positions: ' +
+      '<a href="https://sondehub.org" target="_blank" rel="noopener">SondeHub Tracker</a> ' +
+      '(CC BY-SA 2.0)',
   },
   {
     key: 'pskreporter',

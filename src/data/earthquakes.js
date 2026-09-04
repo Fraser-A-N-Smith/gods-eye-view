@@ -4,6 +4,7 @@ import {
   setOverlayEntries,
   setOverlaySourceVisible,
 } from '../overlays/worldOverlay.js';
+import { finiteOrNull, textOrNull } from './numeric.js';
 
 /**
  * USGS earthquake discs — last 24 hours, M2.5+.
@@ -27,6 +28,23 @@ import {
 
 const API_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson';
 
+/**
+ * EMSC (European-Mediterranean Seismological Centre) FDSN event webservice —
+ * a supplemental regional source, faster and denser than USGS specifically
+ * for Europe/Mediterranean. Fetched directly (no proxy — SeismicPortal is a
+ * public webservice), and its failure never affects USGS-backed availability
+ * (see `fetchEmscFeatures`, `update`). A candidate that plausibly matches an
+ * already-rendered USGS event is dropped (see `isDuplicateEmscEvent`) rather
+ * than double-rendered.
+ */
+const EMSC_API_URL = 'https://www.seismicportal.eu/fdsnws/event/1/query'
+  + '?format=json&limit=200&minmag=2.5&orderby=time';
+
+/** Same-event tolerance when checking an EMSC report against the USGS set. */
+const EMSC_DEDUP_DISTANCE_KM = 50;
+const EMSC_DEDUP_TIME_S = 60;
+const EMSC_DEDUP_MAG_DELTA = 0.5;
+
 export const EARTHQUAKE_OVERLAY_SOURCE_ID = 'earthquakes';
 export const EARTHQUAKE_OVERLAY_COHORT_LIMIT = 96;
 export const EARTHQUAKE_OVERLAY_COLLISION_CAPACITY = 48;
@@ -36,6 +54,88 @@ const DEFAULT_OVERLAY_HOST = Object.freeze({
   setVisible: setOverlaySourceVisible,
   clearSource: clearOverlaySource,
 });
+
+/**
+ * Map one SeismicPortal (EMSC) FDSN-event GeoJSON feature to the same record
+ * shape used for USGS dedup comparison, or null if the feature has no usable
+ * position, magnitude, or timestamp.
+ *
+ * Field names are a best-effort tolerant mapping against EMSC's published
+ * FDSN event webservice format (a `properties` block carrying
+ * lon/lat/mag/time/depth/flynn_region, sometimes duplicated in
+ * `geometry.coordinates`) — worth re-checking against a live response before
+ * relying on this beyond "best-effort regional supplement."
+ * @param {object} feature - One FDSN-event GeoJSON feature.
+ * @returns {{id:string, lat:number, lon:number, mag:number,
+ *   depthKm:number|null, timeMs:number, place:string|null}|null}
+ */
+export function mapEmscFeature(feature) {
+  const p = feature?.properties;
+  if (!p) return null;
+  const coords = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [];
+  const lat = finiteOrNull(p.lat ?? coords[1]);
+  const lon = finiteOrNull(p.lon ?? coords[0]);
+  const mag = finiteOrNull(p.mag);
+  if (lat === null || lon === null || mag === null) return null;
+  // EMSC/FDSN timestamps are ISO 8601 strings — a non-string (e.g. a raw
+  // epoch number, which is what USGS uses) is rejected rather than guessed
+  // at, since a wrong guess here would corrupt the dedup time check below.
+  const rawTime = p.time;
+  const timeMs = typeof rawTime === 'string' && !Number.isNaN(Date.parse(rawTime))
+    ? Date.parse(rawTime)
+    : null;
+  if (timeMs === null) return null;
+  const depthKm = finiteOrNull(p.depth ?? coords[2]);
+  const id = textOrNull(p.unid) || textOrNull(feature?.id) || `emsc:${lat.toFixed(4)},${lon.toFixed(4)}`;
+  return { id, lat, lon, mag, depthKm, timeMs, place: textOrNull(p.flynn_region) || textOrNull(p.place) };
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * True when `candidate` (an EMSC report) plausibly describes the same
+ * physical event as one already in `usgsRecords` — close in space, time, and
+ * magnitude. Conservative by design: a false "duplicate" only costs a
+ * regional-source label on one event, but a false "distinct" double-renders
+ * the same earthquake under two disc entities.
+ * @param {{lat:number, lon:number, mag:number, timeMs:number}} candidate
+ * @param {Array<{lat:number, lon:number, mag:number, timeMs:number}>} usgsRecords
+ * @returns {boolean}
+ */
+export function isDuplicateEmscEvent(candidate, usgsRecords) {
+  if (!Array.isArray(usgsRecords)) return false;
+  return usgsRecords.some((u) => (
+    haversineKm(u.lat, u.lon, candidate.lat, candidate.lon) <= EMSC_DEDUP_DISTANCE_KM
+    && Math.abs(u.timeMs - candidate.timeMs) / 1000 <= EMSC_DEDUP_TIME_S
+    && Math.abs(u.mag - candidate.mag) <= EMSC_DEDUP_MAG_DELTA
+  ));
+}
+
+/**
+ * Best-effort EMSC fetch — every failure mode (network error, non-2xx,
+ * malformed body) degrades to an empty list rather than throwing, so a
+ * SeismicPortal outage or CORS refusal never affects USGS-backed
+ * availability. Same independent-degradation shape as DONKI/NeoWs on the
+ * space-weather panel.
+ * @returns {Promise<Array<object>>} Raw FDSN-event features, or [].
+ */
+async function fetchEmscFeatures() {
+  try {
+    const response = await fetch(EMSC_API_URL);
+    if (!response.ok) return [];
+    const geojson = await response.json();
+    return Array.isArray(geojson?.features) ? geojson.features : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Color by depth:
@@ -102,10 +202,11 @@ export function selectEarthquakeOverlayCohort(
  * fields are null, never NaN/undefined. Falls back to an index-based id
  * when the USGS event id is absent.
  * @param {Object|null|undefined} raw - Plain values pulled off the entity:
- *   {id, mag, place, time, depth, lat, lon}.
+ *   {id, mag, place, time, depth, lat, lon, source}.
  * @param {number} [index=0] - Position in the snapshot (fallback id only).
  * @returns {{id: string, magnitude: number|null, depthKm: number|null,
- *   lat: number|null, lon: number|null, timeMs: number|null, place: string|null}}
+ *   lat: number|null, lon: number|null, timeMs: number|null, place: string|null,
+ *   source: string}}
  */
 export function mapAnalystRecord(raw, index = 0) {
   const num = (v) => (Number.isFinite(v) ? v : null);
@@ -118,6 +219,7 @@ export function mapAnalystRecord(raw, index = 0) {
     lon: num(raw?.lon),
     timeMs: num(raw?.time), // USGS epoch ms
     place: text(raw?.place),
+    source: text(raw?.source) || 'USGS',
   };
 }
 
@@ -177,9 +279,14 @@ export function createEarthquakesLayer({ overlayHost = DEFAULT_OVERLAY_HOST } = 
         return false;
       }
 
+      // EMSC is an optional supplemental regional source — its failure never
+      // affects USGS-backed availability (see fetchEmscFeatures).
+      const emscFeatures = await fetchEmscFeatures();
+
       _dataSource.entities.removeAll();
       let count = 0;
       const overlayEntries = [];
+      const usgsRecords = []; // Plain {lat, lon, mag, timeMs} — EMSC dedup input.
 
       for (const feature of geojson.features) {
         const [lon, lat, depthKm] = feature.geometry.coordinates;
@@ -190,6 +297,7 @@ export function createEarthquakesLayer({ overlayHost = DEFAULT_OVERLAY_HOST } = 
         if (mag < 2.5) continue; // Skip micro-quakes
 
         count++;
+        usgsRecords.push({ lat, lon, mag, timeMs: time });
         const baseRadius = Math.pow(2, mag) * 1000;
         const color = depthColor(depthKm || 0);
         const isSignificant = mag >= 5.0;
@@ -221,12 +329,58 @@ export function createEarthquakesLayer({ overlayHost = DEFAULT_OVERLAY_HOST } = 
             place,
             time,
             depth: depthKm,
+            source: 'USGS',
           },
         });
         overlayEntries.push(createEarthquakeOverlayEntry({
           id: String(stableId),
           position,
           magnitude: mag,
+          accent: color.toCssColorString(),
+        }));
+      }
+
+      for (const feature of emscFeatures) {
+        const mapped = mapEmscFeature(feature);
+        if (!mapped || mapped.mag < 2.5) continue; // Same micro-quake floor as USGS.
+        if (isDuplicateEmscEvent(mapped, usgsRecords)) continue;
+
+        count++;
+        const baseRadius = Math.pow(2, mapped.mag) * 1000;
+        const color = depthColor(mapped.depthKm || 0);
+        const isSignificant = mapped.mag >= 5.0;
+        const fillAlpha = isSignificant ? 0.4 : 0.3;
+        const outlineAlpha = isSignificant ? 1.0 : 0.8;
+
+        const position = Cesium.Cartesian3.fromDegrees(mapped.lon, mapped.lat);
+        _dataSource.entities.add({
+          id: `earthquake:emsc:${mapped.id}`,
+          position,
+          ellipse: {
+            // Static axes — see the module header. Same perf pin as USGS.
+            semiMajorAxis: baseRadius,
+            semiMinorAxis: baseRadius,
+            material: new Cesium.ColorMaterialProperty(
+              color.withAlpha(fillAlpha)
+            ),
+            outline: true,
+            outlineColor: color.withAlpha(outlineAlpha),
+            outlineWidth: isSignificant ? 3 : 2,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          },
+          properties: {
+            usgsId: mapped.id,
+            mag: mapped.mag,
+            place: mapped.place,
+            time: mapped.timeMs,
+            depth: mapped.depthKm,
+            source: 'EMSC',
+          },
+        });
+        overlayEntries.push(createEarthquakeOverlayEntry({
+          id: `emsc:${mapped.id}`,
+          position,
+          magnitude: mapped.mag,
           accent: color.toCssColorString(),
         }));
       }
@@ -295,6 +449,7 @@ export function createEarthquakesLayer({ overlayHost = DEFAULT_OVERLAY_HOST } = 
         place: p?.place?.getValue(now),
         time: p?.time?.getValue(now),
         depth: p?.depth?.getValue(now),
+        source: p?.source?.getValue(now),
         lat: carto ? Cesium.Math.toDegrees(carto.latitude) : null,
         lon: carto ? Cesium.Math.toDegrees(carto.longitude) : null,
       }, result.length));

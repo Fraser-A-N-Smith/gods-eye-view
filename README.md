@@ -192,7 +192,8 @@ Twenty-four live layers. **Twenty of them need nothing at all** — no key, no a
 | 🎖️ **Military Flights** | ADS-B military traffic in amber | adsb.lol | 🟢 |
 | 🚢 **Live Vessels** | Thousands of ships worldwide | AISStream | 🟡 |
 | 🛰️ **Satellites** | A roughly 840-object core catalog, color-coded by class with a live legend — the **DENSE** chip drops in the whole Starlink shell | CelesTrak | 🟢 |
-| 🌍 **Earthquakes** | Global seismic activity, last 24h | USGS | 🟢 |
+| 🎈 **Radiosondes** | Live weather-balloon positions — the altitude band between the Flights and Satellites layers | SondeHub Tracker | 🟢 |
+| 🌍 **Earthquakes** | Global seismic activity, last 24h — supplemented by EMSC for faster Europe/Mediterranean coverage, deduplicated against USGS | USGS + EMSC | 🟢 |
 | 🚗 **Traffic** | Live congestion driving per-vehicle flow at street level — dive below ~8 km and the dots color to real jams. Keyless it's an approximate simulation | TomTom + OSM | 🟢 (🟡 TomTom makes it real — get one) |
 | 📹 **CCTV Mesh** | ~800 public cameras projected *into* the 3D space — Austin · California (Caltrans) · London (TfL). Positions are published; poses are estimated priors **you calibrate by dragging a gizmo on the camera itself** | City APIs | 🟢 |
 | 📻 **Radio** | Geolocated world radio with an **analog tuner** — drag the needle across up to 750 stations and the globe flies to each broadcaster | Radio Browser / broadcasters | 🟢 |
@@ -211,6 +212,8 @@ Twenty-four live layers. **Twenty of them need nothing at all** — no key, no a
 | ⛷️ **Ski Pistes** | Pistes, lifts and nordic trails as a transparent overlay on the globe | OpenSnowMap | 🟢 |
 | 🚆 **Rail Network** | World railway tracks, stations and electrification as a transparent overlay on the globe | OpenRailwayMap | 🟢 |
 | 🎖️ **Mapped Installations** | Viewport-bounded military-site context from community mapping — incomplete by nature, and labeled that way | OpenStreetMap | 🟢 |
+| 🦠 **Disease Outbreaks** | Global health-emergency notices, placed at each notice's reporting country | WHO Disease Outbreak News | 🟢 |
+| 🪓 **Deforestation Alerts** | Viewport-bounded GLAD-L (Landsat) tree-cover-loss detections, age-tinted | Global Forest Watch | 🟡 |
 
 **Also on the globe:** neighborhood overlays · an optional cockpit WX cloud effect. The three raster overlays above draw on the Cesium globe, so they show on the OSM, Bing, GIBS and Sentinel map sources — not over Google 3D, which hides the globe. Each says so on its own row rather than silently drawing nothing. **Bundled static infrastructure:** Datacenters (4,351), Dams (704), and Submarine Cables (712).
 

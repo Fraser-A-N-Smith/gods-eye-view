@@ -57,8 +57,11 @@ import {
 import { resolveAcledPreset, normalizeAcledEvents } from './src/data/acledEventsShape.js';
 import { mergeSpaceWeatherPayload } from './src/data/spaceWeatherShape.js';
 import { mapEonetFeature, mapGdacsFeature } from './src/data/globalHazardsShape.js';
-import { mapVolcanoFeature } from './src/data/volcanoesShape.js';
-import { parseNdbcText } from './src/data/oceanBuoysShape.js';
+import { mapVolcanoFeature, mapVolcanoNotice, mergeVolcanoAlerts } from './src/data/volcanoesShape.js';
+import { mapDiseaseOutbreakFeed } from './src/data/diseaseOutbreaksShape.js';
+import { mapGfwAlertFeed } from './src/data/deforestationAlertsShape.js';
+import { parseNdbcText, mapCoOpsStation } from './src/data/oceanBuoysShape.js';
+import { mapSondeTelemetryFeed } from './src/data/sondehubShape.js';
 import { parsePskReporterXml } from './src/data/hamRadioPropagationShape.js';
 import { mapWaitTimeEntries } from './src/data/borderWaitTimesShape.js';
 import { mapFireballRows } from './src/data/fireballsShape.js';
@@ -81,6 +84,8 @@ import {
   normalizeRegionalPlace,
   normalizeRegionalWeather,
   normalizeReliefWebReports,
+  normalizeRegionalAirQuality,
+  normalizeRegionalFlood,
 } from './src/data/regionalBrief.js';
 import { alpha2ToAlpha3 } from './src/data/iso3166.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
@@ -2884,7 +2889,8 @@ function volcanoesProxy() {
   const VOLCANOES_URL = 'https://webservices.volcano.si.edu/geoserver/GVP-VOTW/ows'
     + '?service=WFS&version=2.0.0&request=GetFeature'
     + '&typeName=GVP-VOTW:Smithsonian_VOTW_Holocene_Volcanoes&outputFormat=json';
-  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution';
+  const VOLCANO_NOTICES_URL = 'https://volcanoes.usgs.gov/vsc/api/volcanoMessageApi/';
+  const ATTRIBUTION = 'Global Volcanism Program, Smithsonian Institution + USGS Volcano Notification Service';
 
   let cache = null;
   let diskLoaded = false;
@@ -2897,6 +2903,39 @@ function volcanoesProxy() {
       const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
       if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
     } catch { /* first run */ }
+  }
+
+  /**
+   * Best-effort fetch of live USGS Volcano Notification/Message API entries
+   * — every failure mode (network error, non-2xx, unexpected response
+   * shape) degrades to an empty list rather than throwing, so this never
+   * affects GVP-backed availability. Same independent-degradation shape as
+   * DONKI/NeoWs on the space-weather panel.
+   *
+   * The response shape is tolerant of a bare array OR a
+   * `{result:[...]}`/`{messages:[...]}` wrapper, since the exact upstream
+   * shape was not verifiable against a live response while writing this
+   * (see `mapVolcanoNotice`'s doc comment in volcanoesShape.js).
+   * @returns {Promise<Array<object>>} See `mapVolcanoNotice` for the record shape.
+   */
+  async function fetchVolcanoNotices() {
+    try {
+      const response = await fetch(VOLCANO_NOTICES_URL, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) return [];
+      const payload = await response.json();
+      const raw = Array.isArray(payload) ? payload
+        : Array.isArray(payload?.result) ? payload.result
+          : Array.isArray(payload?.messages) ? payload.messages
+            : [];
+      const notices = [];
+      for (const entry of raw) {
+        const mapped = mapVolcanoNotice(entry);
+        if (mapped) notices.push(mapped);
+      }
+      return notices;
+    } catch {
+      return [];
+    }
   }
 
   async function saveDiskCache(entry) {
@@ -2933,8 +2972,13 @@ function volcanoesProxy() {
       if (mapped) volcanoes.push(mapped);
     }
 
+    // USGS Volcano Notification is an optional live-status enrichment — its
+    // failure never affects GVP-backed availability (see fetchVolcanoNotices).
+    const notices = await fetchVolcanoNotices();
+    const enriched = mergeVolcanoAlerts(volcanoes, notices);
+
     const body = JSON.stringify({
-      volcanoes: volcanoes.slice(0, MAX_VOLCANOES),
+      volcanoes: enriched.slice(0, MAX_VOLCANOES),
       retrievedAt: Date.now(),
       attribution: ATTRIBUTION,
     });
@@ -2986,6 +3030,126 @@ function volcanoesProxy() {
 }
 
 /**
+ * Disease Outbreaks proxy — WHO Disease Outbreak News (DON), the app's
+ * first health/epidemiological event category.
+ *
+ * ⚠️ WHO's DON API's exact endpoint and JSON shape could not be verified
+ * against a live response while building this (sandboxed network access) —
+ * `DON_URL` below and `mapDiseaseOutbreakFeed`'s tolerant response-wrapper
+ * handling (bare array / `{value:[...]}` / `{result:[...]}`) are a
+ * best-effort guess at WHO's Sitecore-backed news API pattern, worth
+ * re-checking against a live response. Every failure mode (wrong endpoint,
+ * unexpected shape, network error) degrades to zero outbreak notices, never
+ * a crash or a stale-forever cache poisoned with garbage.
+ *
+ * DON entries are sparse and country-granular (see `diseaseOutbreaksShape.js`
+ * for the centroid-resolution/"no match, no plot" discipline), so a daily
+ * TTL is generous, not aggressive.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function diseaseOutbreaksProxy() {
+  const TTL_MS = 24 * 60 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_OUTBREAKS = 200;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'disease-outbreaks-v1.json');
+  const DON_URL = 'https://www.who.int/api/news/diseaseoutbreaknews';
+  const ATTRIBUTION = 'World Health Organization — Disease Outbreak News';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[disease-outbreaks-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=120' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(DON_URL, { signal: AbortSignal.timeout(15000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const outbreaks = mapDiseaseOutbreakFeed(parsed, MAX_OUTBREAKS);
+
+    const body = JSON.stringify({
+      outbreaks,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/disease-outbreaks', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'disease-outbreaks', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[disease-outbreaks-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        // No cache and upstream failed: rather than a hard error, serve an
+        // empty (not stale, not an error) payload — a plausible schema/
+        // endpoint mismatch should read as "no notices," not break the toggle.
+        send(res, 200, JSON.stringify({ outbreaks: [], retrievedAt: Date.now(), attribution: ATTRIBUTION }), 'NONE');
+        console.warn(`[disease-outbreaks-proxy] upstream unavailable (${error?.message || error}) — serving empty`);
+      }
+    });
+  }
+
+  return {
+    name: 'disease-outbreaks-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
  * Ocean Buoys proxy — NOAA National Data Buoy Center (NDBC) `latest_obs.txt`,
  * the latest observation from roughly 800 buoy and coastal stations
  * worldwide.
@@ -3012,11 +3176,77 @@ function oceanBuoysProxy() {
   const MAX_BUOYS = 900;
   const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'ocean-buoys-v1.json');
   const BUOYS_URL = 'https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt';
-  const ATTRIBUTION = 'NOAA National Data Buoy Center (US public domain)';
+  const ATTRIBUTION = 'NOAA National Data Buoy Center + NOAA CO-OPS (US public domain)';
+  const COOPS_STATIONS_PATH = path.join(__dirname, 'config', 'co_ops_stations.json');
+  const COOPS_CONCURRENCY = 10;
+  const COOPS_TIMEOUT_MS = 6000;
 
   let cache = null;
   let diskLoaded = false;
+  let coOpsStations = null;
   const inFlight = new Map();
+
+  async function loadCoOpsStations() {
+    if (coOpsStations) return coOpsStations;
+    try {
+      coOpsStations = JSON.parse(await fsp.readFile(COOPS_STATIONS_PATH, 'utf8'));
+    } catch (error) {
+      console.warn(`[ocean-buoys-proxy] failed to load ${COOPS_STATIONS_PATH}: ${error?.message || error}`);
+      coOpsStations = {};
+    }
+    return coOpsStations;
+  }
+
+  function coOpsDataGetterUrl(stationId) {
+    const params = new URLSearchParams({
+      station: stationId,
+      product: 'water_level',
+      datum: 'MLLW',
+      units: 'metric',
+      time_zone: 'gmt',
+      format: 'json',
+      date: 'latest',
+      application: 'GodsEyeView',
+    });
+    return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?${params}`;
+  }
+
+  /** Best-effort single-station fetch — any failure drops the station, never throws. */
+  async function fetchCoOpsStation(stationId, location) {
+    try {
+      const response = await fetch(coOpsDataGetterUrl(stationId), {
+        signal: AbortSignal.timeout(COOPS_TIMEOUT_MS),
+      });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      return mapCoOpsStation(stationId, location, payload);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fan out over the curated CO-OPS station list with bounded concurrency —
+   * CO-OPS has no bulk "latest reading for every station" endpoint like
+   * NDBC's, so each station is its own request (see `mapCoOpsStation`'s doc
+   * comment in `oceanBuoysShape.js`). Every failure mode (timeout, non-2xx,
+   * malformed body, an unlisted station) degrades to dropping that one
+   * station — never throws, never affects NDBC-backed availability.
+   * @returns {Promise<Array<object>>}
+   */
+  async function fetchCoOpsStations() {
+    const stations = await loadCoOpsStations();
+    const ids = Object.keys(stations);
+    const results = [];
+    for (let i = 0; i < ids.length; i += COOPS_CONCURRENCY) {
+      const batch = ids.slice(i, i + COOPS_CONCURRENCY);
+      const settled = await Promise.allSettled(batch.map((id) => fetchCoOpsStation(id, stations[id])));
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
+      }
+    }
+    return results;
+  }
 
   async function loadDiskCache() {
     if (diskLoaded) return;
@@ -3055,8 +3285,13 @@ function oceanBuoysProxy() {
     }
     const buoys = parseNdbcText(text);
 
+    // CO-OPS tide stations are an optional supplemental source — their
+    // failure never affects NDBC-backed availability (same independent-
+    // degradation shape as DONKI/NeoWs on the space-weather panel).
+    const tideStations = await fetchCoOpsStations();
+
     const body = JSON.stringify({
-      buoys: buoys.slice(0, MAX_BUOYS),
+      buoys: [...buoys.slice(0, MAX_BUOYS), ...tideStations],
       retrievedAt: Date.now(),
       attribution: ATTRIBUTION,
     });
@@ -3102,6 +3337,126 @@ function oceanBuoysProxy() {
 
   return {
     name: 'ocean-buoys-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
+/**
+ * SondeHub proxy — live weather-balloon (radiosonde) telemetry from the
+ * SondeHub Tracker community project.
+ *
+ * The upstream (`api.v2.sondehub.org`) is keyless and public, but SondeHub is
+ * a volunteer-funded project that explicitly asks consumers not to poll
+ * tighter than necessary — this proxy enforces a 60s server-side TTL so every
+ * client sharing this app instance collapses onto one upstream request per
+ * minute regardless of how many browsers have the layer open.
+ *
+ * The pure mapping (`mapSondeTelemetryFeed`) lives in the Cesium-free
+ * `src/data/sondehubShape.js` (mirroring the existing
+ * `oceanBuoysShape.js`/`volcanoesShape.js` precedent) and is imported
+ * directly above — this proxy and the browser layer run the SAME
+ * implementation.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function sondehubProxy() {
+  const TTL_MS = 60 * 1000;
+  const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_SONDES = 500;
+  const CACHE_PATH = path.join(process.cwd(), '.gev-cache', 'sondehub-v1.json');
+  const SONDEHUB_URL = 'https://api.v2.sondehub.org/sondes/telemetry';
+  const ATTRIBUTION = 'SondeHub Tracker (CC BY-SA 2.0)';
+
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const parsed = JSON.parse(await fsp.readFile(CACHE_PATH, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') cache = parsed;
+    } catch { /* first run */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+      await fsp.writeFile(CACHE_PATH, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[sondehub-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=30' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(SONDEHUB_URL, { signal: AbortSignal.timeout(25000) });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const sondes = mapSondeTelemetryFeed(parsed, MAX_SONDES);
+
+    const body = JSON.stringify({
+      sondes,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    });
+    const fresh = { at: Date.now(), body };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/sondehub', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      if (cache && Date.now() - cache.at < TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'sondehub', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) {
+            console.warn(`[sondehub-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          JSON.stringify({ error: 'Sondehub unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'sondehub-proxy',
     configureServer(server) { install(server.middlewares); },
     configurePreviewServer(server) { install(server.middlewares); },
   };
@@ -9930,6 +10285,182 @@ function criticalInfrastructureProxy() {
   };
 }
 
+/**
+ * Deforestation Alerts proxy — Global Forest Watch GLAD-L (Landsat)
+ * tree-cover-loss detections.
+ *
+ * BYOK: Global Forest Watch's Data API requires a free registered token
+ * (`FOREST_WATCH_API_TOKEN` — deliberately NOT `GFW_API_TOKEN`, which this
+ * app already uses for the unrelated Global Fishing Watch vessel-events
+ * layer; both services go by "GFW" but issue separate tokens for separate
+ * APIs, and this app must never let one token silently double as the
+ * other's). Without one, every request returns 503 `{error: 'no_key'}`
+ * before ever touching upstream — same shape as `firmsProxy`.
+ *
+ * VIEWPORT-BOUNDED, same reasoning as `criticalInfrastructureProxy`: global
+ * alert volume is far too dense to preload. The requested bbox is snapped
+ * outward onto a 1° cache grid so neighbouring viewports share one entry;
+ * the client (`deforestationAlerts.js`) trims the returned superset back
+ * down to the exact requested viewport.
+ *
+ * ⚠️ GFW's Data API query mechanism (a SQL-like `?sql=` query against its
+ * REST query endpoint) and this dataset's exact column names could not be
+ * verified against a live response while building this (sandboxed network
+ * access) — `mapGfwAlertFeed` (see `deforestationAlertsShape.js`) tolerates
+ * several candidate column spellings and degrades to zero alerts rather
+ * than a crash on a schema or endpoint mismatch.
+ *
+ * @returns {import('vite').Plugin}
+ */
+function deforestationAlertsProxy() {
+  const TTL_MS = 15 * 60 * 1000;
+  const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+  const MAX_ALERTS = 1500;
+  const MAX_CACHE_ENTRIES = 500;
+  const BBOX_STEP_DEG = 1;
+  const DATASET = 'umd_glad_landsat_alerts';
+  const GFW_QUERY_URL = `https://data-api.globalforestwatch.org/dataset/${DATASET}/latest/query`;
+  const ATTRIBUTION = 'Global Forest Watch (World Resources Institute / NASA GLAD)';
+
+  const cache = new Map();
+  const inFlight = new Map();
+  const rateLimiter = makeRateLimiter({ windowMs: 60_000, max: 30, globalMax: 90 });
+
+  function validBox(params) {
+    const south = requiredFiniteQueryNumber(params, 'south');
+    const west = requiredFiniteQueryNumber(params, 'west');
+    const north = requiredFiniteQueryNumber(params, 'north');
+    const east = requiredFiniteQueryNumber(params, 'east');
+    if (![south, west, north, east].every(Number.isFinite)) return null;
+    if (south < -90 || north > 90 || west < -180 || east > 180 || south >= north || west >= east) return null;
+    if (north - south > 5 || east - west > 5) return null;
+    return { south, west, north, east };
+  }
+
+  function quantizeBox(box) {
+    const snap = (value, grow) => {
+      const cells = Number((value / BBOX_STEP_DEG).toFixed(9));
+      return Number(((grow > 0 ? Math.ceil(cells) : Math.floor(cells)) * BBOX_STEP_DEG).toFixed(6));
+    };
+    return {
+      south: Math.max(-90, snap(box.south, -1)),
+      west: Math.max(-180, snap(box.west, -1)),
+      north: Math.min(90, snap(box.north, 1)),
+      east: Math.min(180, snap(box.east, 1)),
+    };
+  }
+
+  function cacheKey(box) {
+    return [box.south, box.west, box.north, box.east].map((v) => v.toFixed(3)).join(',');
+  }
+
+  function trimCache() {
+    while (cache.size > MAX_CACHE_ENTRIES) {
+      const oldestKey = cache.keys().next().value;
+      cache.delete(oldestKey);
+    }
+  }
+
+  async function refresh(box) {
+    const token = String(process.env.FOREST_WATCH_API_TOKEN || '').trim();
+    // Trailing-year window keeps the query bounded — GLAD-L alerts older
+    // than a year are of little operational interest for a live map.
+    const sinceDate = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+    const sql = `SELECT latitude, longitude, ${DATASET}__date, ${DATASET}__confidence `
+      + `FROM data WHERE ${DATASET}__date > '${sinceDate}' `
+      + `AND latitude BETWEEN ${box.south} AND ${box.north} `
+      + `AND longitude BETWEEN ${box.west} AND ${box.east} `
+      + `ORDER BY ${DATASET}__date DESC LIMIT ${MAX_ALERTS}`;
+    const upstream = await fetch(`${GFW_QUERY_URL}?sql=${encodeURIComponent(sql)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(20000),
+    });
+    const text = await readResponseTextCapped(upstream, MAX_RESPONSE_BYTES);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    const parsed = JSON.parse(text);
+    const alerts = mapGfwAlertFeed(parsed, MAX_ALERTS);
+    return {
+      alerts,
+      truncated: alerts.length >= MAX_ALERTS,
+      retrievedAt: Date.now(),
+      attribution: ATTRIBUTION,
+    };
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/deforestation-alerts', async (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      const token = String(process.env.FOREST_WATCH_API_TOKEN || '').trim();
+      if (!token) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no_key' }));
+        return;
+      }
+      if (!rateLimiter(clientKey(req))) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '10' });
+        res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
+        return;
+      }
+      const url = new URL(req.url || '', 'http://localhost');
+      const requested = validBox(url.searchParams);
+      if (!requested) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'A non-dateline bbox no larger than 5 degrees is required' }));
+        return;
+      }
+      const box = quantizeBox(requested);
+      const key = cacheKey(box);
+      const now = Date.now();
+      const cached = cache.get(key);
+      if (cached && now - cached.at < TTL_MS) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60', 'X-GEV-Cache': 'HIT' });
+        res.end(JSON.stringify(cached.payload));
+        return;
+      }
+      const request = coalesceProxyRequest(inFlight, key, () => refresh(box));
+      try {
+        const payload = await request.promise;
+        cache.set(key, { payload, at: Date.now() });
+        trimCache();
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=60',
+          'X-GEV-Cache': request.shared ? 'INFLIGHT' : 'MISS',
+        });
+        res.end(JSON.stringify(payload));
+      } catch (error) {
+        if (cached) {
+          if (!request.shared) {
+            console.warn(`[deforestation-alerts-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-GEV-Cache': 'STALE-ERROR' });
+          res.end(JSON.stringify(cached.payload));
+          return;
+        }
+        res.writeHead(
+          Number.isInteger(error?.upstreamStatus) ? error.upstreamStatus : 502,
+          { 'Content-Type': 'application/json' },
+        );
+        res.end(JSON.stringify({ error: 'Deforestation alerts unavailable' }));
+      }
+    });
+  }
+
+  return {
+    name: 'deforestation-alerts-proxy',
+    configureServer(server) { install(server.middlewares); },
+    configurePreviewServer(server) { install(server.middlewares); },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Regional cockpit briefing proxy
 // ---------------------------------------------------------------------------
@@ -10187,6 +10718,43 @@ async function fetchRegionalWeather(point) {
   }
 }
 
+/** Open-Meteo Air Quality API — same provider/licence as fetchRegionalWeather, keyless. */
+async function fetchRegionalAirQuality(point) {
+  const params = new URLSearchParams({
+    latitude: point.latitude.toFixed(5),
+    longitude: point.longitude.toFixed(5),
+    current: 'us_aqi,pm2_5,pm10',
+    timezone: 'UTC',
+  });
+  try {
+    const payload = await fetchRegionalJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`, {
+      maxBytes: WEATHER_EFFECTS_MAX_RESPONSE_BYTES,
+    });
+    return normalizeRegionalAirQuality(payload);
+  } catch {
+    return null;
+  }
+}
+
+/** Open-Meteo Flood API (Copernicus GloFAS river discharge) — same provider/licence, keyless. */
+async function fetchRegionalFlood(point) {
+  const params = new URLSearchParams({
+    latitude: point.latitude.toFixed(5),
+    longitude: point.longitude.toFixed(5),
+    daily: 'river_discharge',
+    forecast_days: '1',
+    timezone: 'UTC',
+  });
+  try {
+    const payload = await fetchRegionalJson(`https://flood-api.open-meteo.com/v1/flood?${params}`, {
+      maxBytes: WEATHER_EFFECTS_MAX_RESPONSE_BYTES,
+    });
+    return normalizeRegionalFlood(payload);
+  } catch {
+    return null;
+  }
+}
+
 /** True when at least one regional source produced usable data. */
 export function regionalBriefHasAnySource({ place, weather, news } = {}) {
   return Boolean(place || weather || (news && news.status !== 'unavailable'));
@@ -10194,15 +10762,22 @@ export function regionalBriefHasAnySource({ place, weather, news } = {}) {
 
 function regionalBriefProxy() {
   async function refresh(point, key) {
-    const [placeResult, weatherResult] = await Promise.allSettled([
+    const [placeResult, weatherResult, airQualityResult, floodResult] = await Promise.allSettled([
       fetchRegionalPlace(point),
       fetchRegionalWeather(point),
+      fetchRegionalAirQuality(point),
+      fetchRegionalFlood(point),
     ]);
     const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
     const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
-    // Both depend on the resolved place, not on each other — fetched
-    // concurrently. Neither throws, so a ReliefWeb outage cannot blank news
-    // (or vice versa); see fetchReliefWebReports's own doc.
+    // Air quality and flood are optional enrichments, same as DONKI/NeoWs on the space-weather
+    // panel — either degrades to null independently and never affects overall brief status.
+    const airQuality = airQualityResult.status === 'fulfilled' ? airQualityResult.value : null;
+    const flood = floodResult.status === 'fulfilled' ? floodResult.value : null;
+    // News and humanitarian reports both depend on the resolved place, not on
+    // each other — fetched concurrently. Neither throws, so a ReliefWeb
+    // outage cannot blank news (or vice versa); see fetchReliefWebReports's
+    // own doc.
     const [news, humanitarian] = await Promise.all([
       fetchRegionalNews(place),
       fetchReliefWebReports(place),
@@ -10218,6 +10793,10 @@ function regionalBriefProxy() {
       placeStatus: place ? 'ready' : 'unavailable',
       weather,
       weatherStatus: weather ? 'ready' : 'unavailable',
+      airQuality,
+      airQualityStatus: airQuality ? 'ready' : 'unavailable',
+      flood,
+      floodStatus: flood ? 'ready' : 'unavailable',
       newsStatus: news.status,
       newsQuery: news.query,
       newsSource: news.source,
@@ -10452,7 +11031,9 @@ export default defineConfig(({ mode }) => {
       spaceWeatherProxy(),
       globalHazardsProxy(),
       volcanoesProxy(),
+      diseaseOutbreaksProxy(),
       oceanBuoysProxy(),
+      sondehubProxy(),
       hamRadioProxy(),
       borderWaitTimesProxy(),
       fireballsProxy(),
@@ -10467,6 +11048,7 @@ export default defineConfig(({ mode }) => {
       overpassProxy(),
       militaryInstallationsProxy(),
       criticalInfrastructureProxy(),
+      deforestationAlertsProxy(),
       regionalBriefProxy(),
       weatherEffectsProxy(),
       cctvProxy(),

@@ -171,6 +171,7 @@ import {
   fetchRegionalBrief,
   regionalDistanceM,
   weatherCodeLabel,
+  airQualityLabel,
 } from './data/regionalBrief.js';
 import {
   altitudeRulerCurveInset,
@@ -761,6 +762,9 @@ class CockpitViewController {
     this.localPrecipitation = document.getElementById('cockpit-local-precipitation');
     this.humanitarianStatus = document.getElementById('cockpit-humanitarian-status');
     this.humanitarianList = document.getElementById('cockpit-humanitarian-list');
+    this.localAirQuality = document.getElementById('cockpit-local-air-quality');
+    this.localAirQualityLabel = document.getElementById('cockpit-local-air-quality-label');
+    this.localRiverDischarge = document.getElementById('cockpit-local-river-discharge');
     this.signalCollapsed = false;
     this.signalUserCollapsed = false;
     this.signalItems = [];
@@ -1877,6 +1881,19 @@ class CockpitViewController {
         entry.append(link);
         return entry;
       }));
+    }
+    const airQuality = payload?.airQuality;
+    if (this.localAirQuality) {
+      this.localAirQuality.textContent = Number.isFinite(airQuality?.usAqi)
+        ? String(Math.round(airQuality.usAqi)) : '—';
+    }
+    if (this.localAirQualityLabel) {
+      this.localAirQualityLabel.textContent = airQuality ? airQualityLabel(airQuality.usAqi) : '—';
+    }
+    const flood = payload?.flood;
+    if (this.localRiverDischarge) {
+      this.localRiverDischarge.textContent = Number.isFinite(flood?.dischargeCms)
+        ? flood.dischargeCms.toFixed(1) : '—';
     }
     if (this.signalStream) this.signalStream.dataset.regionalStatus = payload?.status || 'partial';
     if (this.briefPageIndex === 1 && this.briefSource) {

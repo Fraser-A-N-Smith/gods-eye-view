@@ -26,10 +26,17 @@ import { addUniqueEntity } from './entityDedupe.js';
  * SAME implementation the proxy actually runs without dragging this file's
  * `cesium` import into that Node-only process.
  *
- * Each buoy renders as a small colored point sized/colored by wave height —
- * or gray if the buoy reports no wave-height reading at all, since an
- * instrument with nothing to say should not visually read as "calm seas" —
- * with a label showing wind speed.
+ * Each NDBC buoy renders as a small colored point sized/colored by wave
+ * height — or gray if the buoy reports no wave-height reading at all, since
+ * an instrument with nothing to say should not visually read as "calm
+ * seas" — with a label showing wind speed.
+ *
+ * The proxy also merges in a curated set of NOAA CO-OPS tide stations (see
+ * `oceanBuoysShape.js`'s `mapCoOpsStation` doc comment for why that set is
+ * curated rather than a live bulk feed like NDBC's). Those render with a
+ * fixed distinct color (`stationType: 'co-ops-tide'`) and a water-level
+ * label instead of wave height/wind — a different measurement, not a
+ * missing one.
  */
 
 const API_URL = '/api/ocean-buoys';
@@ -54,9 +61,19 @@ function waveStyle(waveHeightM) {
   return { color: Cesium.Color.CYAN, pixelSize: 8 };
 }
 
+/** CO-OPS tide stations get a fixed, distinct color — water level is not a wave-height reading. */
+function tideStyle() {
+  return { color: Cesium.Color.DODGERBLUE, pixelSize: 8 };
+}
+
 /** Format wind speed for the label, or a placeholder when unreported. */
 function windLabel(windSpeedMs) {
   return Number.isFinite(windSpeedMs) ? `${windSpeedMs.toFixed(1)} m/s` : '-- m/s';
+}
+
+/** Format water level for the label, or a placeholder when unreported. */
+function waterLevelLabel(waterLevelM) {
+  return Number.isFinite(waterLevelM) ? `${waterLevelM.toFixed(2)} m` : '-- m';
 }
 
 /**
@@ -66,11 +83,13 @@ function windLabel(windSpeedMs) {
  * null, never NaN/undefined. Falls back to an index-based id when the
  * upstream station id is absent.
  * @param {Object|null|undefined} raw - Plain values:
- *   {id, lat, lon, windSpeedMs, waveHeightM, airTempC, waterTempC}.
+ *   {id, lat, lon, windSpeedMs, waveHeightM, airTempC, waterTempC,
+ *   stationType, waterLevelM}.
  * @param {number} [index=0] - Position in the snapshot (fallback id only).
  * @returns {{id: string, lat: number|null, lon: number|null,
  *   windSpeedMs: number|null, waveHeightM: number|null,
- *   airTempC: number|null, waterTempC: number|null}}
+ *   airTempC: number|null, waterTempC: number|null,
+ *   stationType: string, waterLevelM: number|null}}
  */
 export function mapAnalystRecord(raw, index = 0) {
   const num = (v) => (Number.isFinite(v) ? v : null);
@@ -83,6 +102,8 @@ export function mapAnalystRecord(raw, index = 0) {
     waveHeightM: num(raw?.waveHeightM),
     airTempC: num(raw?.airTempC),
     waterTempC: num(raw?.waterTempC),
+    stationType: text(raw?.stationType) || 'ndbc-buoy',
+    waterLevelM: num(raw?.waterLevelM),
   };
 }
 
@@ -144,9 +165,11 @@ export function createOceanBuoysLayer() {
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
           count++;
+          const isTideStation = buoy.stationType === 'co-ops-tide';
           const waveHeightM = Number.isFinite(buoy.waveHeightM) ? buoy.waveHeightM : null;
           const windSpeedMs = Number.isFinite(buoy.windSpeedMs) ? buoy.windSpeedMs : null;
-          const style = waveStyle(waveHeightM);
+          const waterLevelM = Number.isFinite(buoy.waterLevelM) ? buoy.waterLevelM : null;
+          const style = isTideStation ? tideStyle() : waveStyle(waveHeightM);
           const position = Cesium.Cartesian3.fromDegrees(lon, lat);
           const stableId = buoy.id || `buoy-${count}`;
 
@@ -162,7 +185,7 @@ export function createOceanBuoysLayer() {
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             label: {
-              text: windLabel(windSpeedMs),
+              text: isTideStation ? waterLevelLabel(waterLevelM) : windLabel(windSpeedMs),
               font: '12px sans-serif',
               fillColor: Cesium.Color.WHITE,
               outlineColor: Cesium.Color.BLACK,
@@ -174,12 +197,14 @@ export function createOceanBuoysLayer() {
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             properties: {
-              // Analyst seam (additive): the proxy-assigned buoy station id.
+              // Analyst seam (additive): the proxy-assigned buoy/station id.
               buoyId: buoy.id ?? null,
               windSpeedMs,
               waveHeightM,
               airTempC: Number.isFinite(buoy.airTempC) ? buoy.airTempC : null,
               waterTempC: Number.isFinite(buoy.waterTempC) ? buoy.waterTempC : null,
+              stationType: buoy.stationType || 'ndbc-buoy',
+              waterLevelM,
             },
           });
           if (!added) skipped++;
@@ -236,6 +261,8 @@ export function createOceanBuoysLayer() {
           waveHeightM: p?.waveHeightM?.getValue(now),
           airTempC: p?.airTempC?.getValue(now),
           waterTempC: p?.waterTempC?.getValue(now),
+          stationType: p?.stationType?.getValue(now),
+          waterLevelM: p?.waterLevelM?.getValue(now),
           lat: carto ? Cesium.Math.toDegrees(carto.latitude) : null,
           lon: carto ? Cesium.Math.toDegrees(carto.longitude) : null,
         }, result.length));

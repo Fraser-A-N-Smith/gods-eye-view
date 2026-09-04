@@ -124,6 +124,111 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   reason, instead of both falling into the same hardcoded bucket by name or
   geography.
 
+<!-- The entries below landed independently on the OSINT-sources branch the
+     same day as the (a)-(d) entries above; relettered (e)-(k) on merge to
+     avoid colliding with those same-day labels. -->
+
+## [Unreleased] — 2026-08-31 (k)
+
+### Added
+
+- Added a **Deforestation Alerts** layer (Global Forest Watch GLAD-L/Landsat
+  tree-cover-loss detections), viewport-bounded like Critical Infrastructure
+  — global alert volume is far too dense to preload. Age-tinted points
+  (red at 30 days, fading to gray past 180). Requires a free registered
+  `FOREST_WATCH_API_TOKEN` — deliberately a different variable from
+  `GFW_API_TOKEN` (Global Fishing Watch), so the two unrelated "GFW"
+  services' tokens can never cross-wire. Without a token the layer reads
+  `KEY REQUIRED`. ⚠️ GFW's Data API query mechanism and this dataset's
+  column names are a best-effort mapping pending live-schema verification.
+- This is the first layer to use a multi-character share-link token
+  (`da`) — single-char tokens (a-z0-9) ran out at 35 registered layers.
+  See the `validateLayerStateRegistry` note in `layerState.js`: tokens
+  are `.`-joined in the encoded string, so widening the format was a
+  capacity increase with no effect on existing share links. Also fixed
+  an undersized `MAX_ENABLED_LAYERS_CHARS` (64, raised to 320) that was
+  already silently rejecting a share link with every layer enabled
+  before this change.
+
+## [Unreleased] — 2026-08-31 (j)
+
+### Added
+
+- Added a **Disease Outbreaks** layer (WHO Disease Outbreak News) — the
+  app's first health/epidemiological event category. WHO reports at
+  country granularity, not lat/lon, so each notice is placed at its
+  country's approximate position via a new curated `countryCentroids.js`
+  lookup (~150 countries; an unmatched country is dropped, not guessed
+  at). Colored by recency (30/180-day bands). Keyless. ⚠️ WHO's DON API's
+  exact endpoint and JSON shape are a best-effort guess pending
+  live-schema verification — a wrong guess degrades to zero notices, not
+  a crash.
+
+## [Unreleased] — 2026-08-31 (i)
+
+### Added
+
+- The **Active Volcanoes** layer now merges in live USGS Volcano
+  Notification Service alert status for US-monitored volcanoes, matched
+  onto Smithsonian GVP entries by name. A WATCH/WARNING alert overrides
+  the eruption-recency color with a larger marker; any active alert level
+  appends a bracketed suffix to the label (e.g. `Kilauea [WATCH]`).
+  Keyless; a volcano with no matching notice — the common case globally —
+  renders exactly as before. ⚠️ The upstream message API's field names are
+  a best-effort tolerant mapping pending live-schema verification.
+
+## [Unreleased] — 2026-08-31 (h)
+
+### Added
+
+- The **Ocean Buoys** layer now also merges in real-time water level from a
+  curated set of ~25 major NOAA CO-OPS tide stations (US public domain),
+  rendered with a fixed distinct color and a water-level label
+  (`stationType: 'co-ops-tide'`) alongside the existing NDBC wave/wind
+  buoys. CO-OPS has no bulk "latest reading for every station" endpoint, so
+  each station is fetched individually with bounded concurrency (10 at a
+  time); any per-station failure drops that station without affecting
+  NDBC-backed availability. ⚠️ The `datagetter` response field mapping is a
+  best-effort mapping against CO-OPS's published format pending
+  live-schema verification.
+
+## [Unreleased] — 2026-08-31 (g)
+
+### Added
+
+- The **Earthquakes** layer now supplements USGS with EMSC (European-
+  Mediterranean Seismological Centre) reports — faster and denser than USGS
+  specifically for Europe/Mediterranean. An EMSC report matching a USGS
+  event in space, time, and magnitude is dropped rather than double-
+  rendered; a genuinely distinct EMSC event renders alongside USGS ones,
+  tagged `source: 'EMSC'` for the analyst query engine. Keyless; an EMSC
+  fetch failure never affects USGS-backed availability.
+
+## [Unreleased] — 2026-08-31 (f)
+
+### Added
+
+- Added a **Radiosondes** layer (SondeHub Tracker): live weather-balloon
+  positions worldwide, sitting between the Flights and Satellites layers as
+  a genuinely different altitude band. Keyless; the `/api/sondehub` proxy
+  enforces a 60-second server-side cache so every client sharing this app
+  instance collapses onto one upstream request per minute, respecting
+  SondeHub's request not to poll its volunteer-funded infrastructure any
+  tighter than necessary.
+
+## [Unreleased] — 2026-08-31 (e)
+
+### Added
+
+- Added **air quality** (US AQI, PM2.5, PM10 from Copernicus CAMS) and **river
+  discharge** (flood forecast from Copernicus GloFAS) to the cockpit Local Info
+  panel, both served through Open-Meteo's Air Quality and Flood APIs — the same
+  free, keyless provider already used for current weather. Each field is an
+  independent optional enrichment of `/api/regional-brief` (same
+  independent-degradation pattern as the space-weather panel's DONKI/NeoWs
+  fields): a fetch failure or a location with no modeled river reach shows as
+  `—`, never as an error, and never affects the panel's overall status.
+
 ## [Unreleased] — 2026-08-30 (f)
 
 ### Added

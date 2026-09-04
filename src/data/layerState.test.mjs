@@ -5,6 +5,7 @@ import { DataLayerManager } from './manager.js';
 import {
   LAYER_STATE_REGISTRY,
   LAYER_STATE_STORAGE_KEY,
+  LAYER_STATE_VERSION,
   LayerStateCoordinator,
   REGISTERED_LAYER_IDS,
   SHARE_TRACKING_RESTORE_POLICIES,
@@ -174,8 +175,22 @@ function unregisteredToken() {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  assert.equal(REGISTERED_LAYER_IDS.length, 38);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 38);
+  assert.equal(REGISTERED_LAYER_IDS.length, 41);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 41);
+  {
+    // A share link with EVERY registered layer enabled is a real, legitimate
+    // state (a user toggling everything on), not an edge case — it must
+    // round-trip through encode/decode, never fail closed as "too large."
+    // This is the regression pin for a cap that was previously undersized:
+    // MAX_ENABLED_LAYERS_CHARS = 64 already rejected the full 35-layer
+    // registry (69 chars of single-char tokens) before any 2-3 char token
+    // was ever registered.
+    const params = new URLSearchParams([['v', String(LAYER_STATE_VERSION)]]);
+    encodeLayerStateParams(params, { enabledLayerIds: REGISTERED_LAYER_IDS, options: {} });
+    const decoded = decodeLayerStateParams(params);
+    assert.ok(decoded, 'enabling every registered layer must not fail closed');
+    assert.deepEqual([...decoded.enabledLayerIds].sort(), [...REGISTERED_LAYER_IDS].sort());
+  }
   assert.deepEqual(REGISTERED_LAYER_IDS, [...REGISTERED_LAYER_IDS].sort());
   assert.throws(
     () => validateLayerStateRegistry([...LAYER_STATE_REGISTRY, LAYER_STATE_REGISTRY[0]]),

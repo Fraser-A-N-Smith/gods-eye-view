@@ -18,14 +18,20 @@ const PENDING_TRACKING_POLL_MS = 1_000;
 const TRACKING_ID_GRAMMAR = /^[0-9a-z~_-]{1,16}$/;
 /**
  * Ceilings for the untrusted v2 layer fields. Both are far above any legitimate
- * payload — every layer enabled at once is `2 * REGISTERED_LAYER_IDS.length - 1`
- * dot-joined one-character tokens (36 layers → 71 chars as of 2026-08-31; kept
- * with real headroom above that, not tuned to the current count) plus a dozen
- * short option assignments — so a value past them is malformed or hostile.
- * Reject the WHOLE payload, matching the unknown-token rule — never salvage a
- * prefix.
+ * payload, so a value past them is malformed or hostile. Reject the WHOLE
+ * payload, matching the unknown-token rule — never salvage a prefix.
+ *
+ * MAX_ENABLED_LAYERS_CHARS must stay above the cost of enabling EVERY
+ * registered layer at once — a real, legitimate share link, not an edge
+ * case. It was previously 64, sized for an assumed "~16 enabled at once";
+ * that already undercounted the full registry (69 chars to enable all 35
+ * layers as of this writing) even before newer layers started using 2-3
+ * char tokens (see the token-length note on `validateLayerStateRegistry`
+ * below). 320 gives real headroom for registry growth (including 2-3 char
+ * tokens, not just the single-char majority) while still rejecting a truly
+ * hostile payload.
  */
-const MAX_ENABLED_LAYERS_CHARS = 160;
+const MAX_ENABLED_LAYERS_CHARS = 320;
 const MAX_LAYER_OPTIONS_CHARS = 512;
 export const LAYER_STATE_STORAGE_KEY = 'gev:layer-state:v2';
 export const LAYER_RESTORE_ORIGINS = Object.freeze({
@@ -306,6 +312,14 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'border-wait-times', token: '6', disposition: 'enabled-only' }),
   Object.freeze({ id: 'cctv', token: 'c', disposition: 'enabled+options', optionOwner: 'cctv' }),
   Object.freeze({ id: 'critical-infrastructure', token: '5', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'deforestation-alerts', token: 'da', disposition: 'enabled-only' }),
+  Object.freeze({
+    // 'D' — reassigned here from '9' during the merge that brought in
+    // 'acled-events' at the same token: [a-z0-9] (36 slots) is fully spoken
+    // for, so this draws from the widened [a-zA-Z0-9] grammar instead (see
+    // the note on the token check in validateLayerStateRegistry).
+    id: 'disease-outbreaks', token: 'D', disposition: 'enabled-only',
+  }),
   Object.freeze({ id: 'earthquakes', token: 'e', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fire-perimeters', token: 'p', disposition: 'enabled-only' }),
   Object.freeze({ id: 'fireballs', token: '7', disposition: 'enabled-only' }),
@@ -337,6 +351,12 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'reference-boundaries-labels', token: 'B', disposition: 'enabled-only' }),
   Object.freeze({ id: 'rocket-launches', token: 'x', disposition: 'enabled-only' }),
   Object.freeze({ id: 'satellites', token: 's', disposition: 'enabled+options', optionOwner: 'satellites' }),
+  Object.freeze({
+    // 'C' — reassigned here from '8' during the merge that brought in
+    // 'internet-outages' at the same token: see the identical note on
+    // 'disease-outbreaks' above.
+    id: 'sondehub', token: 'C', disposition: 'enabled-only',
+  }),
   Object.freeze({ id: 'space-weather', token: 'z', disposition: 'enabled-only' }),
   Object.freeze({ id: 'telegeography-submarine-cables', token: 'u', disposition: 'enabled-only' }),
   Object.freeze({ id: 'traffic', token: 't', disposition: 'enabled-only' }),
@@ -389,12 +409,18 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    // [a-z0-9] alone is 36 slots, exactly the current registry size — case is
-    // significant in the URL codec (no lowercasing anywhere in encode/decode),
-    // so widening to [a-zA-Z0-9] (62 slots) is a free, backward-compatible
-    // headroom increase: every already-issued lowercase/digit token keeps
-    // decoding identically.
-    if (!/^[a-zA-Z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // Two independent capacity increases, combined: single lowercase-a-z0-9
+    // tokens (36 slots) ran out at 35 registered layers. Case is significant
+    // in the URL codec (no lowercasing anywhere in encode/decode), so
+    // widening to [a-zA-Z0-9] (62 slots) is a free, backward-compatible
+    // headroom increase. Tokens are also '.'-joined in the encoded string
+    // (see encode/decodeLayerStateParams), never concatenated, so allowing
+    // 2-3 char tokens is a second, independent, backward-compatible increase
+    // — a longer token costs a few more bytes per enabled layer, not a
+    // format change. '0' is deliberately kept unregistered forever (see the
+    // "no unregistered layer token remains for this test" guard in
+    // sharelink.celestial.test.mjs).
+    if (!/^[a-zA-Z0-9]{1,3}$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

@@ -31,7 +31,17 @@ test('volcano analyst record: full record maps every contract field', () => {
     country: 'United States',
     volcanoType: 'Shield',
     elevationM: 1222,
+    alertLevel: null,
+    colorCode: null,
+    alertUpdatedAt: null,
   });
+});
+
+test('volcano analyst record: passes through a live alert enrichment when present', () => {
+  const r = mapAnalystRecord({ ...FULL_RAW, alertLevel: 'WATCH', colorCode: 'ORANGE', alertUpdatedAt: '2026-08-30T00:00:00.000Z' });
+  assert.equal(r.alertLevel, 'WATCH');
+  assert.equal(r.colorCode, 'ORANGE');
+  assert.equal(r.alertUpdatedAt, '2026-08-30T00:00:00.000Z');
 });
 
 test('volcano analyst record: missing id falls back to index-based id', () => {
@@ -119,6 +129,58 @@ test('volcano color bands: 2015 is red, 1960 is orange, 1920 is yellow', async (
     assert.ok(byId['volcano:gvp:1'].point.color.getValue(now).equals(Cesium.Color.RED));
     assert.ok(byId['volcano:gvp:2'].point.color.getValue(now).equals(Cesium.Color.ORANGE));
     assert.ok(byId['volcano:gvp:3'].point.color.getValue(now).equals(Cesium.Color.YELLOW));
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('a live WATCH/WARNING alert overrides eruption-recency coloring and appends a label suffix', async () => {
+  const originalFetch = globalThis.fetch;
+  const viewer = makeViewer();
+  const layer = createVolcanoesLayer();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      volcanoes: [
+        // Would otherwise be YELLOW (1920) — WARNING must override to RED/16px.
+        { id: 'gvp:1', name: 'Old But Warning', lat: 10, lon: 20, lastEruptionYear: 1920, alertLevel: 'WARNING' },
+        // Would otherwise be YELLOW (1920) — WATCH must override to ORANGE/14px.
+        { id: 'gvp:2', name: 'Old But Watch', lat: 11, lon: 21, lastEruptionYear: 1920, alertLevel: 'WATCH' },
+        // ADVISORY is not WATCH/WARNING — falls through to recency coloring unchanged.
+        { id: 'gvp:3', name: 'Advisory Only', lat: 12, lon: 22, lastEruptionYear: 1920, alertLevel: 'ADVISORY' },
+      ],
+    }),
+  });
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    await layer.update(viewer);
+
+    const entities = viewer._dataSources[0].entities.values;
+    const byId = Object.fromEntries(entities.map((e) => [e.id, e]));
+    const now = Cesium.JulianDate.now();
+
+    assert.ok(byId['volcano:gvp:1'].point.color.getValue(now).equals(Cesium.Color.RED));
+    assert.equal(byId['volcano:gvp:1'].point.pixelSize.getValue(now), 16);
+    assert.equal(byId['volcano:gvp:1'].label.text.getValue(now), 'Old But Warning [WARNING]');
+
+    assert.ok(byId['volcano:gvp:2'].point.color.getValue(now).equals(Cesium.Color.ORANGE));
+    assert.equal(byId['volcano:gvp:2'].point.pixelSize.getValue(now), 14);
+    assert.equal(byId['volcano:gvp:2'].label.text.getValue(now), 'Old But Watch [WATCH]');
+
+    assert.ok(
+      byId['volcano:gvp:3'].point.color.getValue(now).equals(Cesium.Color.YELLOW),
+      'ADVISORY is not a color-override level — recency coloring applies unchanged',
+    );
+    // The label suffix is broader than the color override: any active,
+    // non-NORMAL level is worth telling the analyst about in the label text,
+    // even when it isn't strong enough to override the point's color/size.
+    assert.equal(byId['volcano:gvp:3'].label.text.getValue(now), 'Advisory Only [ADVISORY]');
+
+    const records = layer.getAnalystRecords();
+    assert.equal(records.find((r) => r.name === 'Old But Warning').alertLevel, 'WARNING');
+    assert.equal(records.find((r) => r.name === 'Advisory Only').alertLevel, 'ADVISORY');
   } finally {
     globalThis.fetch = originalFetch;
     layer.destroy(viewer);

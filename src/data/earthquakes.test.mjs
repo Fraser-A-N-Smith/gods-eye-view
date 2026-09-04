@@ -10,7 +10,9 @@ import {
   EARTHQUAKE_OVERLAY_COLLISION_CAPACITY,
   createEarthquakeOverlayEntry,
   createEarthquakesLayer,
+  isDuplicateEmscEvent,
   mapAnalystRecord,
+  mapEmscFeature,
   selectEarthquakeOverlayCohort,
 } from './earthquakes.js';
 import { DataLayerManager } from './manager.js';
@@ -40,7 +42,13 @@ test('earthquake analyst record: full record maps every contract field', () => {
     lon: -150.41,
     timeMs: 1_753_600_000_000,
     place: '42 km SW of Anchorage, Alaska',
+    source: 'USGS',
   });
+});
+
+test('earthquake analyst record: source defaults to USGS when absent, passes through when supplied', () => {
+  assert.equal(mapAnalystRecord(FULL_RAW).source, 'USGS');
+  assert.equal(mapAnalystRecord({ ...FULL_RAW, source: 'EMSC' }).source, 'EMSC');
 });
 
 test('earthquake analyst record: missing USGS id falls back to index-based id', () => {
@@ -63,6 +71,169 @@ test('earthquake analyst record: missing fields become null, never NaN/undefined
 test('earthquake analyst record: output is JSON-safe (no Cesium types)', () => {
   const r = mapAnalystRecord(FULL_RAW, 0);
   assert.deepEqual(JSON.parse(JSON.stringify(r)), r);
+});
+
+// ── EMSC supplemental-source mapping and dedup ──────────────────────────────
+
+const EMSC_FEATURE = {
+  id: '20260830_0000123',
+  geometry: { type: 'Point', coordinates: [23.7, 38.0, 10] },
+  properties: {
+    lon: 23.7, lat: 38.0, depth: 10, mag: 4.6,
+    time: '2026-08-30T12:00:00.0Z', flynn_region: 'SOUTHERN GREECE', unid: '20260830_0000123',
+  },
+};
+
+test('mapEmscFeature: maps a well-formed FDSN-event feature', () => {
+  assert.deepEqual(mapEmscFeature(EMSC_FEATURE), {
+    id: '20260830_0000123', lat: 38.0, lon: 23.7, mag: 4.6,
+    depthKm: 10, timeMs: Date.parse('2026-08-30T12:00:00.0Z'), place: 'SOUTHERN GREECE',
+  });
+});
+
+test('mapEmscFeature: falls back to geometry.coordinates when properties omit lon/lat/depth', () => {
+  const r = mapEmscFeature({
+    id: 'x1',
+    geometry: { coordinates: [10.1, 45.2, 5] },
+    properties: { mag: 3.2, time: '2026-08-30T00:00:00Z' },
+  });
+  assert.equal(r.lon, 10.1);
+  assert.equal(r.lat, 45.2);
+  assert.equal(r.depthKm, 5);
+});
+
+test('mapEmscFeature: rejects a non-ISO-string time (e.g. a raw epoch number) rather than guessing', () => {
+  assert.equal(mapEmscFeature({ ...EMSC_FEATURE, properties: { ...EMSC_FEATURE.properties, time: 1_753_600_000_000 } }), null);
+  assert.equal(mapEmscFeature({ ...EMSC_FEATURE, properties: { ...EMSC_FEATURE.properties, time: undefined } }), null);
+});
+
+test('mapEmscFeature: rejects missing position or magnitude', () => {
+  assert.equal(mapEmscFeature({ properties: { mag: 4, time: '2026-08-30T00:00:00Z' } }), null);
+  assert.equal(mapEmscFeature({ geometry: { coordinates: [1, 2] }, properties: { time: '2026-08-30T00:00:00Z' } }), null);
+  assert.equal(mapEmscFeature(null), null);
+});
+
+test('isDuplicateEmscEvent: matches an EMSC report close in space, time, and magnitude to a USGS event', () => {
+  const usgsRecords = [{ lat: 38.0, lon: 23.71, mag: 4.5, timeMs: Date.parse('2026-08-30T12:00:10Z') }];
+  const candidate = { lat: 38.0, lon: 23.7, mag: 4.6, timeMs: Date.parse('2026-08-30T12:00:00Z') };
+  assert.equal(isDuplicateEmscEvent(candidate, usgsRecords), true);
+});
+
+test('isDuplicateEmscEvent: a genuinely distinct event (far away) is not a duplicate', () => {
+  const usgsRecords = [{ lat: 38.0, lon: 23.7, mag: 4.5, timeMs: Date.parse('2026-08-30T12:00:00Z') }];
+  const candidate = { lat: 40.1, lon: -74.0, mag: 4.6, timeMs: Date.parse('2026-08-30T12:00:00Z') };
+  assert.equal(isDuplicateEmscEvent(candidate, usgsRecords), false);
+});
+
+test('isDuplicateEmscEvent: same place but hours apart, or same time but very different magnitude, is not a duplicate', () => {
+  const usgsRecords = [{ lat: 38.0, lon: 23.7, mag: 4.5, timeMs: Date.parse('2026-08-30T12:00:00Z') }];
+  assert.equal(isDuplicateEmscEvent(
+    { lat: 38.0, lon: 23.7, mag: 4.5, timeMs: Date.parse('2026-08-30T15:00:00Z') },
+    usgsRecords,
+  ), false, 'three hours apart is not the same event');
+  assert.equal(isDuplicateEmscEvent(
+    { lat: 38.0, lon: 23.7, mag: 6.5, timeMs: Date.parse('2026-08-30T12:00:00Z') },
+    usgsRecords,
+  ), false, 'a 2.0 magnitude gap is not the same event');
+  assert.deepEqual(isDuplicateEmscEvent({ lat: 0, lon: 0, mag: 1, timeMs: 0 }, null), false);
+});
+
+test('real earthquake lifecycle merges a distinct EMSC event and drops a duplicate one', async () => {
+  const originalFetch = globalThis.fetch;
+  const dataSources = [];
+  const viewer = {
+    dataSources: {
+      add(dataSource) { dataSources.push(dataSource); return dataSource; },
+      remove() { return true; },
+    },
+  };
+  const layer = createEarthquakesLayer({
+    overlayHost: { setEntries() {}, setVisible() {}, clearSource() {} },
+  });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('seismicportal.eu')) {
+      return {
+        ok: true,
+        json: async () => ({
+          features: [
+            // Duplicate of the USGS event below (same place/time/magnitude).
+            {
+              id: 'dup-1',
+              geometry: { coordinates: [-150.41, 61.02, 41.7] },
+              properties: { mag: 5.2, time: '2026-01-01T00:00:00Z', flynn_region: 'ALASKA' },
+            },
+            // Genuinely distinct event USGS did not report.
+            {
+              id: 'distinct-1',
+              geometry: { coordinates: [23.7, 38.0, 10] },
+              properties: { mag: 4.6, time: '2026-08-30T12:00:00Z', flynn_region: 'SOUTHERN GREECE' },
+            },
+          ],
+        }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        features: [{
+          id: 'us-dup-1',
+          geometry: { coordinates: [-150.41, 61.02, 41.7] },
+          properties: { mag: 5.2, place: 'Alaska', time: Date.parse('2026-01-01T00:00:00Z') },
+        }],
+      }),
+    };
+  };
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    await layer.update(viewer);
+
+    assert.equal(layer.getStats().count, 2, 'the duplicate EMSC event must not be double-rendered');
+    const records = layer.getAnalystRecords();
+    assert.deepEqual(records.map((r) => r.source).sort(), ['EMSC', 'USGS']);
+    const emscRecord = records.find((r) => r.source === 'EMSC');
+    assert.equal(emscRecord.place, 'SOUTHERN GREECE');
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
+});
+
+test('an EMSC fetch failure never affects USGS-backed earthquake availability', async () => {
+  const originalFetch = globalThis.fetch;
+  const dataSources = [];
+  const viewer = {
+    dataSources: {
+      add(dataSource) { dataSources.push(dataSource); return dataSource; },
+      remove() { return true; },
+    },
+  };
+  const layer = createEarthquakesLayer({
+    overlayHost: { setEntries() {}, setVisible() {}, clearSource() {} },
+  });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('seismicportal.eu')) throw new Error('network unreachable');
+    return {
+      ok: true,
+      json: async () => ({
+        features: [{
+          id: 'us-solo-1',
+          geometry: { coordinates: [-122.4, 37.79, 8.2] },
+          properties: { mag: 4.2, place: 'Solo One', time: 1_753_600_000_000 },
+        }],
+      }),
+    };
+  };
+  try {
+    layer.init(viewer);
+    layer.enable(viewer);
+    assert.equal(await layer.update(viewer), true);
+    assert.equal(layer.getStats().count, 1);
+    assert.equal(layer.getStats().error, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    layer.destroy(viewer);
+  }
 });
 
 test('earthquake overlay copy keeps source-side magnitude formatting and bounded priority', () => {
